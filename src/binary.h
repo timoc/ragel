@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -25,6 +25,7 @@
 
 #include <iostream>
 #include "codegen.h"
+#include "tables.h"
 
 /* Forwards. */
 struct CodeGenData;
@@ -33,37 +34,22 @@ struct RedTransAp;
 struct RedStateAp;
 
 class Binary
-	: public CodeGen
+	: public virtual Tables
 {
+protected:
+	enum Type {
+		Loop = 1, Exp
+	};
+
 public:
-	Binary( const CodeGenArgs &args );
+	Binary( const CodeGenArgs &args, Type type )
+	:
+		Tables( args ),
+		type(type)
+	{}
 
 protected:
-	TableArray keyOffsets;
-	TableArray singleLens;
-	TableArray rangeLens;
-	TableArray indexOffsets;
-	TableArray indicies;
-	TableArray transCondSpacesWi;
-	TableArray transOffsetsWi;
-	TableArray transLengthsWi;
-	TableArray transCondSpaces;
-	TableArray transOffsets;
-	TableArray transLengths;
-	TableArray condTargs;
-	TableArray condActions;
-	TableArray toStateActions;
-	TableArray fromStateActions;
-	TableArray eofActions;
-	TableArray eofTransDirect;
-	TableArray eofTransIndexed;
-	TableArray actions;
-	TableArray keys;
-	TableArray condKeys;
-	TableArray nfaTargs;
-	TableArray nfaOffsets;
-	TableArray nfaPushActions;
-	TableArray nfaPopTrans;
+	Type type;
 
 	std::ostream &COND_KEYS_v1();
 	std::ostream &COND_SPACES_v1();
@@ -89,9 +75,9 @@ protected:
 	void taCondActions();
 	void taToStateActions();
 	void taFromStateActions();
+	void taEofTrans();
+	void taEofConds();
 	void taEofActions();
-	void taEofTransDirect();
-	void taEofTransIndexed();
 	void taKeys();
 	void taActions();
 	void taCondKeys();
@@ -102,37 +88,11 @@ protected:
 
 	void setKeyType();
 
-	void LOCATE_TRANS();
-	void LOCATE_COND();
-
-	void GOTO( ostream &ret, int gotoDest, bool inFinish );
-	void CALL( ostream &ret, int callDest, int targState, bool inFinish );
-	void NCALL( ostream &ret, int callDest, int targState, bool inFinish );
-	void NEXT( ostream &ret, int nextDest, bool inFinish );
-	void GOTO_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish );
-	void NEXT_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish );
-	void CALL_EXPR( ostream &ret, GenInlineItem *ilItem, int targState, bool inFinish );
-	void NCALL_EXPR( ostream &ret, GenInlineItem *ilItem, int targState, bool inFinish );
-	void CURS( ostream &ret, bool inFinish );
-	void TARGS( ostream &ret, bool inFinish, int targState );
-	void RET( ostream &ret, bool inFinish );
-	void NRET( ostream &ret, bool inFinish );
-	void BREAK( ostream &ret, int targState, bool csForced );
-	void NBREAK( ostream &ret, int targState, bool csForced );
-
-	virtual void TO_STATE_ACTION( RedStateAp *state ) = 0;
-	virtual void FROM_STATE_ACTION( RedStateAp *state ) = 0;
-	virtual void EOF_ACTION( RedStateAp *state ) = 0;
-	virtual void COND_ACTION( RedCondPair *cond ) = 0;
-
-	virtual void NFA_PUSH_ACTION( RedNfaTarg *targ ) = 0;
-	virtual void NFA_POP_TEST( RedNfaTarg *targ ) = 0;
-	virtual void NFA_FROM_STATE_ACTION_EXEC() = 0;
-
 	void setTableState( TableArray::State );
 
-	void NFA_PUSH();
-	void NFA_POP();
+	virtual void writeData();
+	virtual void tableDataPass();
+	virtual void genAnalysis();
 };
 
 #endif

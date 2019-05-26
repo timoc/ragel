@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2015 Adrian Thurston <thurston@colm.net>
+ * Copyright 2014-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -77,7 +77,6 @@ public:
 protected:
 	string FSM_NAME();
 	string START_STATE_ID();
-	string TABS( int level );
 	string KEY( Key key );
 	string COND_KEY( CondKey key );
 	string LDIR_PATH( char *path );
@@ -157,11 +156,8 @@ protected:
 	bool outLabelUsed;
 	bool testEofUsed;
 	bool againLabelUsed;
-	bool useIndicies;
 	long nextLmSwitchLabel;
 	bool stackCS;
-
-	void genLineDirective( ostream &out );
 
 	void NBREAK( ostream &ret, int targState, bool csForced );
 	void NCALL( ostream &ret, int callDest, int targState, bool inFinish );
@@ -180,8 +176,6 @@ protected:
 			int targState, bool inFinish, bool csForced );
 
 public:
-	/* Determine if we should use indicies. */
-	virtual void calcIndexSize() {}
 
 	virtual string NULL_ITEM();
 	virtual string POINTER();
@@ -202,7 +196,7 @@ public:
 	unsigned int FROM_STATE_ACTION( RedStateAp *state );
 	unsigned int EOF_ACTION( RedStateAp *state );
 
-	void COND_TRANSLATE( GenStateCond *stateCond, int level );
+	void COND_TRANSLATE( GenStateCond *stateCond );
 	void STATE_CONDS( RedStateAp *state, bool genDefault ); 
 
 	std::ostream &EXIT_STATES();
@@ -241,7 +235,7 @@ public:
 
 	void emitSingleIfElseIf( RedStateAp *state );
 	void emitSingleJumpTable( RedStateAp *state, std::string def );
-	void emitRangeBSearch( RedStateAp *state, int level, int low, int high );
+	void emitRangeBSearch( RedStateAp *state, int low, int high );
 	void emitCharClassIfElseIf( RedStateAp *state );
 	void emitCharClassJumpTable( RedStateAp *state, std::string def );
 
@@ -251,6 +245,9 @@ public:
 	void setLabelsNeeded();
 
 	void setNfaIds();
+
+	void genOutputLineDirective( ostream &out ) {}
+	void genLineDirective( ostream &out, int line, const char *file ) {}
 };
 
 #endif

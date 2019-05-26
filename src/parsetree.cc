@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2006 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -38,7 +38,8 @@ ostream &operator<<( ostream &out, const NameRef &nameRef );
 ostream &operator<<( ostream &out, const NameInst &nameInst );
 
 /* Read string literal (and regex) options and return the true end. */
-const char *checkLitOptions( InputData *id, const InputLoc &loc, const char *data, int length, bool &caseInsensitive )
+const char *checkLitOptions( InputData *id, const InputLoc &loc,
+		const char *data, int length, bool &caseInsensitive )
 {
 	const char *end = data + length - 1;
 	while ( *end != '\'' && *end != '\"' && *end != '/' ) {
@@ -94,7 +95,8 @@ char *prepareLitString( InputData *id, const InputLoc &loc, const char *data, lo
 	return resData;
 }
 
-Key *prepareHexString( ParseData *pd, const InputLoc &loc, const char *data, long length, long &resLen )
+Key *prepareHexString( ParseData *pd, const InputLoc &loc,
+		const char *data, long length, long &resLen )
 {
 	Key *dest = new Key[( length - 2 ) >> 1];
 	const char *src = data;
@@ -286,6 +288,52 @@ void LongestMatch::makeActions( ParseData *pd )
 		lmi->actLagBehind = newLmAction( pd, lmi->getLoc(), actName, inlineList );
 	}
 
+	/*
+	 * NFA actions
+	 *
+	 * Actions that execute the user action and restart on the next character.
+	 * These actions will set tokend themselves (it is the current char). They
+	 * also reset the nfa machinery used to choose between tokens.
+	 */
+	for ( LmPartList::Iter lmi = *longestMatchList; lmi.lte(); lmi++ ) {
+		/* For each part create actions for setting the match type.  We need
+		 * to do this so that the actions will go into the actionIndex. */
+		InlineList *inlineList = new InlineList;
+		inlineList->append( new InlineItem( InputLoc(), InlineItem::Stmt ) );
+		inlineList->head->children = new InlineList;
+		inlineList->head->children->append( new InlineItem( lmi->getLoc(), this, lmi, 
+				InlineItem::LmNfaOnLast ) );
+		char *actName = new char[50];
+		sprintf( actName, "nlast%i", lmi->longestMatchId );
+		lmi->actNfaOnLast = newLmAction( pd, lmi->getLoc(), actName, inlineList );
+	}
+
+	for ( LmPartList::Iter lmi = *longestMatchList; lmi.lte(); lmi++ ) {
+		/* For each part create actions for setting the match type.  We need
+		 * to do this so that the actions will go into the actionIndex. */
+		InlineList *inlineList = new InlineList;
+		inlineList->append( new InlineItem( InputLoc(), InlineItem::Stmt ) );
+		inlineList->head->children = new InlineList;
+		inlineList->head->children->append( new InlineItem( lmi->getLoc(), this, lmi, 
+				InlineItem::LmNfaOnNext ) );
+		char *actName = new char[50];
+		sprintf( actName, "nnext%i", lmi->longestMatchId );
+		lmi->actNfaOnNext = newLmAction( pd, lmi->getLoc(), actName, inlineList );
+	}
+
+	for ( LmPartList::Iter lmi = *longestMatchList; lmi.lte(); lmi++ ) {
+		/* For each part create actions for setting the match type.  We need
+		 * to do this so that the actions will go into the actionIndex. */
+		InlineList *inlineList = new InlineList;
+		inlineList->append( new InlineItem( InputLoc(), InlineItem::Stmt ) );
+		inlineList->head->children = new InlineList;
+		inlineList->head->children->append( new InlineItem( lmi->getLoc(), this, lmi, 
+				InlineItem::LmNfaOnEof ) );
+		char *actName = new char[50];
+		sprintf( actName, "neof%i", lmi->longestMatchId );
+		lmi->actNfaOnEof = newLmAction( pd, lmi->getLoc(), actName, inlineList );
+	}
+
 	InputLoc loc;
 	loc.line = 1;
 	loc.col = 1;
@@ -351,292 +399,16 @@ void LongestMatch::resolveNameRefs( ParseData *pd )
 
 void LongestMatch::restart( FsmAp *graph, TransAp *trans )
 {
-	if ( trans->plain() ) {
-		StateAp *fromState = trans->tdap()->fromState;
-		graph->detachTrans( fromState, trans->tdap()->toState, trans->tdap() );
-		graph->attachTrans( fromState, graph->startState, trans->tdap() );
-	}
-	else {
-		for ( CondList::Iter cti = trans->tcap()->condList; cti.lte(); cti++ ) {
-			StateAp *fromState = cti->fromState;
-			graph->detachTrans( fromState, cti->toState, cti );
-			graph->attachTrans( fromState, graph->startState, cti );
-		}
-	}
+	StateAp *fromState = trans->tdap()->fromState;
+	graph->detachTrans( fromState, trans->tdap()->toState, trans->tdap() );
+	graph->attachTrans( fromState, graph->startState, trans->tdap() );
 }
 
-void LongestMatch::runLongestMatch( ParseData *pd, FsmAp *graph )
+void LongestMatch::restart( FsmAp *graph, CondAp *cti )
 {
-	graph->markReachableFromHereStopFinal( graph->startState );
-	for ( StateList::Iter ms = graph->stateList; ms.lte(); ms++ ) {
-		if ( ms->stateBits & STB_ISMARKED ) {
-			ms->lmItemSet.insert( 0 );
-			ms->stateBits &= ~ STB_ISMARKED;
-		}
-	}
-
-	/* Transfer the first item of non-empty lmAction tables to the item sets
-	 * of the states that follow. Exclude states that have no transitions out.
-	 * This must happen on a separate pass so that on each iteration of the
-	 * next pass we have the item set entries from all lmAction tables. */
-	for ( StateList::Iter st = graph->stateList; st.lte(); st++ ) {
-		for ( TransList::Iter trans = st->outList; trans.lte(); trans++ ) {
-			if ( trans->plain() ) {
-				TransDataAp *tdap = trans->tdap();
-				if ( tdap->lmActionTable.length() > 0 ) {
-					LmActionTableEl *lmAct = tdap->lmActionTable.data;
-					StateAp *toState = tdap->toState;
-					assert( toState );
-
-					/* Can only optimize this if there are no transitions out.
-					 * Note there can be out transitions going nowhere with
-					 * actions and they too must inhibit this optimization. */
-					if ( toState->outList.length() > 0 ) {
-						/* Fill the item sets. */
-						graph->markReachableFromHereStopFinal( toState );
-						for ( StateList::Iter ms = graph->stateList; ms.lte(); ms++ ) {
-							if ( ms->stateBits & STB_ISMARKED ) {
-								ms->lmItemSet.insert( lmAct->value );
-								ms->stateBits &= ~ STB_ISMARKED;
-							}
-						}
-					}
-				}
-			}
-			else {
-				for ( CondList::Iter cond = trans->tcap()->condList; cond.lte(); cond++ ) {
-					if ( cond->lmActionTable.length() > 0 ) {
-
-						LmActionTableEl *lmAct = cond->lmActionTable.data;
-						StateAp *toState = cond->toState;
-						assert( toState );
-
-						/* Can only optimize this if there are no transitions out.
-						 * Note there can be out transitions going nowhere with
-						 * actions and they too must inhibit this optimization. */
-						if ( toState->outList.length() > 0 ) {
-							/* Fill the item sets. */
-							graph->markReachableFromHereStopFinal( toState );
-							for ( StateList::Iter ms = graph->stateList; ms.lte(); ms++ ) {
-								if ( ms->stateBits & STB_ISMARKED ) {
-									ms->lmItemSet.insert( lmAct->value );
-									ms->stateBits &= ~ STB_ISMARKED;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	/* The lmItem sets are now filled, telling us which longest match rules
-	 * can succeed in which states. First determine if we need to make sure
-	 * act is defaulted to zero. We need to do this if there are any states
-	 * with lmItemSet.length() > 1 and NULL is included. That is, that the
-	 * switch may get called when in fact nothing has been matched. */
-	int maxItemSetLength = 0;
-	graph->markReachableFromHereStopFinal( graph->startState );
-	for ( StateList::Iter ms = graph->stateList; ms.lte(); ms++ ) {
-		if ( ms->stateBits & STB_ISMARKED ) {
-			if ( ms->lmItemSet.length() > maxItemSetLength )
-				maxItemSetLength = ms->lmItemSet.length();
-			ms->stateBits &= ~ STB_ISMARKED;
-		}
-	}
-
-	/* The actions executed on starting to match a token. */
-	FsmRes res = FsmAp::isolateStartState( graph );
-	graph = res.fsm;
-	graph->startState->toStateActionTable.setAction( pd->initTokStartOrd, pd->initTokStart );
-	graph->startState->fromStateActionTable.setAction( pd->setTokStartOrd, pd->setTokStart );
-	if ( maxItemSetLength > 1 ) {
-		/* The longest match action switch may be called when tokens are
-		 * matched, in which case act must be initialized, there must be a
-		 * case to handle the error, and the generated machine will require an
-		 * error state. */
-		lmSwitchHandlesError = true;
-		pd->fsmCtx->lmRequiresErrorState = true;
-		graph->startState->toStateActionTable.setAction( pd->initActIdOrd, pd->initActId );
-	}
-
-	/* The place to store transitions to restart. It maybe possible for the
-	 * restarting to affect the searching through the graph that follows. For
-	 * now take the safe route and save the list of transitions to restart
-	 * until after all searching is done. */
-	Vector<TransAp*> restartTrans;
-
-	/* Set actions that do immediate token recognition, set the longest match part
-	 * id and set the token ending. */
-	for ( StateList::Iter st = graph->stateList; st.lte(); st++ ) {
-		for ( TransList::Iter trans = st->outList; trans.lte(); trans++ ) {
-			if ( trans->plain() ) {
-				TransDataAp *tdap = trans->tdap();
-				if ( tdap->lmActionTable.length() > 0 ) {
-					LmActionTableEl *lmAct = tdap->lmActionTable.data;
-					StateAp *toState = tdap->toState;
-					assert( toState );
-
-					/* Can only optimize this if there are no transitions out.
-					 * Note there can be out transitions going nowhere with
-					 * actions and they too must inhibit this optimization. */
-					if ( toState->outList.length() == 0 ) {
-						/* Can execute the immediate action for the longest match
-						 * part. Redirect the action to the start state.
-						 *
-						 * NOTE: When we need to inhibit on_last due to leaving
-						 * actions the above test suffices. If the state has out
-						 * actions then it will fail because the out action will
-						 * have been transferred to an error transition, which
-						 * makes the outlist non-empty. */
-						tdap->actionTable.setAction( lmAct->key, 
-								lmAct->value->actOnLast );
-						restartTrans.append( trans );
-					}
-					else {
-						/* Look for non final states that have a non-empty item
-						 * set. If these are present then we need to record the
-						 * end of the token.  Also Find the highest item set
-						 * length reachable from here (excluding at transtions to
-						 * final states). */
-						bool nonFinalNonEmptyItemSet = false;
-						maxItemSetLength = 0;
-						graph->markReachableFromHereStopFinal( toState );
-						for ( StateList::Iter ms = graph->stateList; ms.lte(); ms++ ) {
-							if ( ms->stateBits & STB_ISMARKED ) {
-								if ( ms->lmItemSet.length() > 0 && !ms->isFinState() )
-									nonFinalNonEmptyItemSet = true;
-								if ( ms->lmItemSet.length() > maxItemSetLength )
-									maxItemSetLength = ms->lmItemSet.length();
-								ms->stateBits &= ~ STB_ISMARKED;
-							}
-						}
-
-						/* If there are reachable states that are not final and
-						 * have non empty item sets or that have an item set
-						 * length greater than one then we need to set tokend
-						 * because the error action that matches the token will
-						 * require it. */
-						if ( nonFinalNonEmptyItemSet || maxItemSetLength > 1 )
-							tdap->actionTable.setAction( pd->setTokEndOrd, pd->setTokEnd );
-
-						/* Some states may not know which longest match item to
-						 * execute, must set it. */
-						if ( maxItemSetLength > 1 ) {
-							/* There are transitions out, another match may come. */
-							tdap->actionTable.setAction( lmAct->key, 
-									lmAct->value->setActId );
-						}
-					}
-				}
-			}
-			else {
-				for ( CondList::Iter cond = trans->tcap()->condList; cond.lte(); cond++ ) {
-					if ( cond->lmActionTable.length() > 0 ) {
-						LmActionTableEl *lmAct = cond->lmActionTable.data;
-						StateAp *toState = cond->toState;
-						assert( toState );
-
-						/* Can only optimize this if there are no transitions out.
-						 * Note there can be out transitions going nowhere with
-						 * actions and they too must inhibit this optimization. */
-						if ( toState->outList.length() == 0 ) {
-							/* Can execute the immediate action for the longest match
-							 * part. Redirect the action to the start state.
-							 *
-							 * NOTE: When we need to inhibit on_last due to leaving
-							 * actions the above test suffices. If the state has out
-							 * actions then it will fail because the out action will
-							 * have been transferred to an error transition, which
-							 * makes the outlist non-empty. */
-							cond->actionTable.setAction( lmAct->key, 
-									lmAct->value->actOnLast );
-							restartTrans.append( trans );
-						}
-						else {
-							/* Look for non final states that have a non-empty item
-							 * set. If these are present then we need to record the
-							 * end of the token.  Also Find the highest item set
-							 * length reachable from here (excluding at transtions to
-							 * final states). */
-							bool nonFinalNonEmptyItemSet = false;
-							maxItemSetLength = 0;
-							graph->markReachableFromHereStopFinal( toState );
-							for ( StateList::Iter ms = graph->stateList; ms.lte(); ms++ ) {
-								if ( ms->stateBits & STB_ISMARKED ) {
-									if ( ms->lmItemSet.length() > 0 && !ms->isFinState() )
-										nonFinalNonEmptyItemSet = true;
-									if ( ms->lmItemSet.length() > maxItemSetLength )
-										maxItemSetLength = ms->lmItemSet.length();
-									ms->stateBits &= ~ STB_ISMARKED;
-								}
-							}
-
-							/* If there are reachable states that are not final and
-							 * have non empty item sets or that have an item set
-							 * length greater than one then we need to set tokend
-							 * because the error action that matches the token will
-							 * require it. */
-							if ( nonFinalNonEmptyItemSet || maxItemSetLength > 1 )
-								cond->actionTable.setAction( pd->setTokEndOrd, pd->setTokEnd );
-
-							/* Some states may not know which longest match item to
-							 * execute, must set it. */
-							if ( maxItemSetLength > 1 ) {
-								/* There are transitions out, another match may come. */
-								cond->actionTable.setAction( lmAct->key, lmAct->value->setActId );
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	/* Now that all graph searching is done it certainly safe set the
-	 * restarting. It may be safe above, however this must be verified. */
-	for ( Vector<TransAp*>::Iter pt = restartTrans; pt.lte(); pt++ )
-		restart( graph, *pt );
-
-	int lmErrActionOrd = pd->fsmCtx->curActionOrd++;
-
-	/* Embed the error for recognizing a char. */
-	for ( StateList::Iter st = graph->stateList; st.lte(); st++ ) {
-		if ( st->lmItemSet.length() == 1 && st->lmItemSet[0] != 0 ) {
-			if ( st->isFinState() ) {
-				/* On error execute the onActNext action, which knows that
-				 * the last character of the token was one back and restart. */
-				graph->setErrorTarget( st, graph->startState, &lmErrActionOrd, 
-						&st->lmItemSet[0]->actOnNext, 1 );
-				st->eofActionTable.setAction( lmErrActionOrd, 
-						st->lmItemSet[0]->actOnNext );
-				st->eofTarget = graph->startState;
-			}
-			else {
-				graph->setErrorTarget( st, graph->startState, &lmErrActionOrd, 
-						&st->lmItemSet[0]->actLagBehind, 1 );
-				st->eofActionTable.setAction( lmErrActionOrd, 
-						st->lmItemSet[0]->actLagBehind );
-				st->eofTarget = graph->startState;
-			}
-		}
-		else if ( st->lmItemSet.length() > 1 ) {
-			/* Need to use the select. Take note of which items the select
-			 * is needed for so only the necessary actions are included. */
-			for ( LmItemSet::Iter plmi = st->lmItemSet; plmi.lte(); plmi++ ) {
-				if ( *plmi != 0 )
-					(*plmi)->inLmSelect = true;
-			}
-			/* On error, execute the action select and go to the start state. */
-			graph->setErrorTarget( st, graph->startState, &lmErrActionOrd, 
-					&lmActSelect, 1 );
-			st->eofActionTable.setAction( lmErrActionOrd, lmActSelect );
-			st->eofTarget = graph->startState;
-		}
-	}
-	
-	/* Finally, the start state should be made final. */
-	graph->setFinState( graph->startState );
+	StateAp *fromState = cti->fromState;
+	graph->detachTrans( fromState, cti->toState, cti );
+	graph->attachTrans( fromState, graph->startState, cti );
 }
 
 void LongestMatch::transferScannerLeavingActions( FsmAp *graph )
@@ -647,7 +419,7 @@ void LongestMatch::transferScannerLeavingActions( FsmAp *graph )
 	}
 }
 
-FsmRes LongestMatch::walk( ParseData *pd )
+FsmRes LongestMatch::walkClassic( ParseData *pd )
 {
 	/* The longest match has it's own name scope. */
 	NameFrame nameFrame = pd->enterNameScope( true, 1 );
@@ -688,6 +460,15 @@ FsmRes LongestMatch::walk( ParseData *pd )
 
 	delete[] parts;
 	return res;
+}
+
+
+FsmRes LongestMatch::walk( ParseData *pd )
+{
+	if ( nfaConstruction )
+		return walkNfa( pd );
+	else
+		return walkClassic( pd );
 }
 
 NfaUnion::~NfaUnion()
@@ -1951,7 +1732,8 @@ Factor::~Factor()
 		case LongestMatchType:
 			delete longestMatch;
 			break;
-		case NfaRep: case CondStar: case CondPlus:
+		case NfaWrap: case NfaRep:
+		case CondStar: case CondPlus:
 			delete expression;
 			break;
 	}
@@ -1979,11 +1761,44 @@ FsmRes Factor::walk( ParseData *pd )
 	case NfaRep: {
 		FsmRes exprTree = expression->walk( pd );
 
-		FsmRes res = FsmAp::nfaRepeatOp( exprTree.fsm, action1, action2, action3,
-				action4, action5, action6 );
+		if ( mode == Factor::NfaLegacy ) {
+			FsmRes res = FsmAp::nfaRepeatOp( exprTree.fsm, action1, action2, action3,
+					action4, action5, action6 );
 
-		res.fsm->verifyIntegrity();
-		return res;
+			res.fsm->verifyIntegrity();
+			return res;
+		}
+		else if ( mode == Factor::NfaLazy ) {
+			FsmRes res = FsmAp::nfaRepeatOp2( exprTree.fsm, action1, action2, action3,
+					action4, action5, action6, FsmAp::NfaLazy );
+
+			res.fsm->verifyIntegrity();
+			return res;
+		}
+		else {
+			FsmRes res = FsmAp::nfaRepeatOp2( exprTree.fsm, action1, action2, action3,
+					action4, action5, action6, FsmAp::NfaGreedy );
+
+			res.fsm->verifyIntegrity();
+			return res;
+		}
+	}
+	case NfaWrap: {
+		FsmRes exprTree = expression->walk( pd );
+		if ( mode == Factor::NfaLazy ) {
+			FsmRes res = FsmAp::nfaWrap( exprTree.fsm, action1, action2, action3,
+					action4, /* action5, */ action6, FsmAp::NfaLazy );
+
+			res.fsm->verifyIntegrity();
+			return res;
+		}
+		else {
+			FsmRes res = FsmAp::nfaWrap( exprTree.fsm, action1, action2, action3,
+					action4, /* action5, */ action6, FsmAp::NfaGreedy );
+
+			res.fsm->verifyIntegrity();
+			return res;
+		}
 	}
 	case CondStar: {
 		FsmRes exprTree = expression->walk( pd );
@@ -2030,6 +1845,7 @@ void Factor::makeNameTree( ParseData *pd )
 	case LongestMatchType:
 		longestMatch->makeNameTree( pd );
 		break;
+	case NfaWrap:
 	case NfaRep:
 	case CondStar:
 	case CondPlus:
@@ -2056,6 +1872,7 @@ void Factor::resolveNameRefs( ParseData *pd )
 		longestMatch->resolveNameRefs( pd );
 		break;
 	case NfaRep:
+	case NfaWrap:
 	case CondStar:
 	case CondPlus:
 		expression->resolveNameRefs( pd );

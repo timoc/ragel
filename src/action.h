@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2016 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -40,7 +40,7 @@ struct InlineItem
 		Text, Goto, Call, Ncall, Next, GotoExpr, CallExpr, NcallExpr, NextExpr, Ret, Nret,
 		PChar, Char, Hold, Curs, Targs, Entry, Exec, Break, Nbreak,
 		LmSwitch, LmSetActId, LmSetTokEnd, LmOnLast, LmOnNext, LmOnLagBehind,
-		LmInitAct, LmInitTokStart, LmSetTokStart, Stmt, Subst,
+		LmInitAct, LmInitTokStart, LmSetTokStart, LmNfaOnNext, LmNfaOnLast, LmNfaOnEof, Stmt, Subst,
 		NfaWrapAction, NfaWrapConds
 	};
 

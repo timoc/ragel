@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2006, 2013 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -23,11 +23,30 @@
 #ifndef _COMMON_H
 #define _COMMON_H
 
+#include <iostream>
 #include <fstream>
 #include <climits>
 #include "dlist.h"
 
 struct colm_location;
+
+struct InputData;
+struct CodeGenData;
+struct HostLang;
+struct CodeGenArgs;
+
+enum RagelBackend
+{
+	Direct,
+	Translated
+};
+
+enum BackendFeature
+{
+	GotoFeature,
+	BreakFeature,
+	VarFeature
+};
 
 #define S8BIT_MIN  -128
 #define S8BIT_MAX  127
@@ -199,64 +218,51 @@ struct HostType
 	unsigned int size;
 };
 
+typedef void (*GenLineDirectiveT)( std::ostream &out, bool nld, int line, const char *file );
+typedef const char *(*DefaultOutFnT)( const char *inputFileName );
+typedef CodeGenData *(*MakeCodeGenT)( const HostLang *hostLang, const CodeGenArgs &args );
+
 struct HostLang
 {
-	/* Target language. */
-	enum Lang
-	{
-		C,
-		D,
-		Go,
-		Java,
-		Ruby,
-		CSharp,
-		OCaml,
-		Crack,
-		Asm,
-		Rust,
-		Julia,
-		JS
-	};
-
-	const char *name;
-	const char *arg;
-	Lang lang;
 	HostType *hostTypes;
 	int numHostTypes;
-	HostType *defaultAlphType;
+	int defaultAlphType;
 	bool explicitUnsigned;
-	bool rlhcRequired;
-	const char *rlhcArg;
+	bool loopLabels;
+
+	RagelBackend backend;
+	BackendFeature feature;
+
+	MakeCodeGenT makeCodeGen;
+	DefaultOutFnT defaultOutFn;
+	GenLineDirectiveT genLineDirective;
 };
 
-extern const HostLang hostLangC;
-extern const HostLang hostLangD;
-extern const HostLang hostLangGo;
-extern const HostLang hostLangJava;
-extern const HostLang hostLangRuby;
-extern const HostLang hostLangCSharp;
-extern const HostLang hostLangOCaml;
-extern const HostLang hostLangCrack;
-extern const HostLang hostLangAsm;
-extern const HostLang hostLangRust;
-extern const HostLang hostLangJulia;
-extern const HostLang hostLangJS;
+void genLineDirectiveC( std::ostream &out, bool nld, int line, const char *file );
+void genLineDirectiveAsm( std::ostream &out, bool nld, int line, const char *file );
+void genLineDirectiveTrans( std::ostream &out, bool nld, int line, const char *file );
 
-extern const HostLang *hostLangs[];
-extern const int numHostLangs;
+extern const HostLang hostLangC;
+extern const HostLang hostLangAsm;
 
 HostType *findAlphType( const HostLang *hostLang, const char *s1 );
 HostType *findAlphType( const HostLang *hostLang, const char *s1, const char *s2 );
 HostType *findAlphTypeInternal( const HostLang *hostLang, const char *s1 );
 
+const char *defaultOutFnC( const char *inputFileName );
+extern HostType hostTypesC[];
+
 /* An abstraction of the key operators that manages key operations such as
  * comparison and increment according the signedness of the key. */
 struct KeyOps
 {
-	/* Default to signed alphabet. */
+	/* Defaults to C "char" type: Signed 8 bit. */
 	KeyOps()
 	:
-		isSigned(true)
+		isSigned(true),
+		explicitUnsigned(true),
+		minKey(CHAR_MIN),
+		maxKey(CHAR_MAX)
 	{}
 
 	bool isSigned;
@@ -385,7 +391,9 @@ inline void CondKey::increment()
 
 /* Filter on the output stream that keeps track of the number of lines
  * output. */
-class output_filter : public std::filebuf
+class output_filter
+:	
+	public std::filebuf
 {
 public:
 	output_filter( const char *fileName )
@@ -393,11 +401,12 @@ public:
 		fileName(fileName),
 		line(1),
 		level(0),
-		indent(false)
+		indent(false),
+		singleIndent(false)
 	{}
 
 	virtual int sync();
-	virtual std::streamsize xsputn(const char* s, std::streamsize n);
+	virtual std::streamsize xsputn( const char* s, std::streamsize n );
 
 	std::streamsize countAndWrite( const char* s, std::streamsize n );
 
@@ -405,6 +414,19 @@ public:
 	int line;
 	int level;
 	bool indent;
+	bool singleIndent;
+};
+
+class nullbuf
+: 
+	public std::streambuf
+{
+public:
+	virtual std::streamsize xsputn( const char * s, std::streamsize n )
+		{ return n; }
+
+	virtual int overflow( int c )
+		{ return 1; }
 };
 
 class cfilebuf : public std::streambuf
@@ -476,16 +498,7 @@ enum RagelFrontend
 	ReduceBased
 };
 
-enum RagelBackend
-{
-	Direct,
-	Translated
-};
-
-enum BackendFeature
-{
-	GotoFeature,
-	VarFeature
-};
+CodeGenData *makeCodeGen( const HostLang *hostLang, const CodeGenArgs &args );
+CodeGenData *makeCodeGenAsm( const HostLang *hostLang, const CodeGenArgs &args );
 
 #endif

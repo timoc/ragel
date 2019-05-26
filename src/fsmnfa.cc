@@ -1,5 +1,5 @@
 /*
- * Copyright 2015, 2016 Adrian Thurston <thurston@colm.net>
+ * Copyright 2015-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -51,8 +51,6 @@ void FsmAp::nfaFillInStates()
 		nfaList.detach( state );
 	}
 }
-
-
 
 void FsmAp::prepareNfaRound()
 {
@@ -132,17 +130,226 @@ void FsmAp::nfaMergeStates( StateAp *destState,
  * to happen before any user actions. 
  */
 const int ORD_PUSH = 0;
-const int ORD_RESTORE = -2;
+const int ORD_RESTORE = -3;
 const int ORD_COND = -1;
+const int ORD_COND2 = -2;
 const int ORD_TEST = 1073741824;
 
 void FsmAp::transferOutToNfaTrans( NfaTrans *trans, StateAp *state )
 {
-	trans->popAction.setActions( state->outActionTable );
+	trans->popFrom = state->fromStateActionTable;
 	trans->popCondSpace = state->outCondSpace;
 	trans->popCondKeys = state->outCondKeys;
 	trans->priorTable.setPriors( state->outPriorTable );
+	trans->popAction.setActions( state->outActionTable );
 }
+
+FsmRes FsmAp::nfaWrap( FsmAp *fsm, Action *push, Action *pop, Action *init,
+		Action *stay, Action *exit, NfaRepeatMode mode )
+{
+	/*
+	 * First Concat.
+	 */
+	StateSet origFinals = fsm->finStateSet;
+
+	/* Get the orig start state. */
+	StateAp *origStartState = fsm->startState;
+
+	/* New start state. */
+	StateAp *newStart = fsm->addState();
+
+	newStart->nfaOut = new NfaTransList;
+
+	const int orderInit =   0;
+	const int orderStay =   mode == NfaGreedy ? 3 : 1;
+	const int orderExit =   mode == NfaGreedy ? 1 : 3;
+
+	NfaTrans *trans;
+	if ( init ) {
+		/* Transition into the repetition. Doesn't make much sense to flip this
+		 * statically false, but provided for consistency of interface. Allows
+		 * an init so we can have only local state manipulation. */
+		trans = new NfaTrans( orderInit );
+
+		trans->pushTable.setAction( ORD_PUSH, push );
+		trans->restoreTable.setAction( ORD_RESTORE, pop );
+		trans->popTest.setAction( ORD_TEST, init );
+
+		newStart->nfaOut->append( trans );
+		fsm->attachToNfa( newStart, origStartState, trans );
+	}
+
+	StateAp *newFinal = fsm->addState();
+
+	for ( StateSet::Iter orig = origFinals; orig.lte(); orig++ ) {
+		/* For every final state, we place a new final state in front of it,
+		 * with an NFA transition to the original. This is the "stay" choice. */
+		StateAp *repl = fsm->addState();
+		fsm->moveInwardTrans( repl, *orig );
+
+		repl->nfaOut = new NfaTransList;
+
+		if ( stay != 0 ) {
+			/* Transition to original final state. Represents staying. */
+			trans = new NfaTrans( orderStay );
+
+			trans->pushTable.setAction( ORD_PUSH, push );
+			trans->restoreTable.setAction( ORD_RESTORE, pop );
+			trans->popTest.setAction( ORD_TEST, stay );
+
+			repl->nfaOut->append( trans );
+			fsm->attachToNfa( repl, *orig, trans );
+		}
+
+		if ( exit != 0 ) {
+			/* Transition to thew new final. Represents exiting. */
+			trans = new NfaTrans( orderExit );
+
+			trans->pushTable.setAction( ORD_PUSH, push );
+			trans->restoreTable.setAction( ORD_RESTORE, pop );
+			trans->popTest.setAction( ORD_TEST, exit );
+
+			fsm->transferOutToNfaTrans( trans, *orig );
+			repl->fromStateActionTable.setActions( (*orig)->fromStateActionTable );
+
+			repl->nfaOut->append( trans );
+			fsm->attachToNfa( repl, newFinal, trans );
+		}
+
+		fsm->unsetFinState( *orig );
+	}
+
+	fsm->unsetStartState();
+	fsm->setStartState( newStart );
+	fsm->setFinState( newFinal );
+
+	return FsmRes( FsmRes::Fsm(), fsm );
+}
+
+
+FsmRes FsmAp::nfaRepeatOp2( FsmAp *fsm, Action *push, Action *pop, Action *init,
+		Action *stay, Action *repeat, Action *exit, NfaRepeatMode mode )
+{
+	/*
+	 * First Concat.
+	 */
+	StateSet origFinals = fsm->finStateSet;
+
+	/* Get the orig start state. */
+	StateAp *origStartState = fsm->startState;
+	StateAp *repStartState = fsm->dupStartState();
+
+	/* New start state. */
+	StateAp *newStart1 = fsm->addState();
+	StateAp *newStart2 = fsm->addState();
+
+	newStart1->nfaOut = new NfaTransList;
+	newStart2->nfaOut = new NfaTransList;
+
+	const int orderInit =   0;
+	const int orderStay =   mode == NfaGreedy ? 3 : 1;
+	const int orderRepeat = mode == NfaGreedy ? 2 : 2;
+	const int orderExit =   mode == NfaGreedy ? 1 : 3;
+
+	NfaTrans *trans;
+	if ( init ) {
+		/* Transition into the repetition. Doesn't make much sense to flip this
+		 * statically false, but provided for consistency of interface. Allows
+		 * an init so we can have only local state manipulation. */
+		trans = new NfaTrans( orderInit );
+
+		trans->pushTable.setAction( ORD_PUSH, push );
+		trans->restoreTable.setAction( ORD_RESTORE, pop );
+		trans->popTest.setAction( ORD_TEST, init );
+
+		newStart1->nfaOut->append( trans );
+		fsm->attachToNfa( newStart1, newStart2, trans );
+	}
+
+	StateAp *newFinal = fsm->addState();
+
+	if ( exit ) {
+		trans = new NfaTrans( orderExit );
+
+		trans->pushTable.setAction( ORD_PUSH, push );
+		trans->restoreTable.setAction( ORD_RESTORE, pop );
+		trans->popTest.setAction( ORD_TEST, exit );
+
+		newStart2->nfaOut->append( trans );
+		fsm->attachToNfa( newStart1, newFinal, trans );
+	}
+
+	if ( repeat ) {
+		trans = new NfaTrans( orderRepeat );
+
+		trans->pushTable.setAction( ORD_PUSH, push );
+		trans->restoreTable.setAction( ORD_RESTORE, pop );
+		trans->popTest.setAction( ORD_TEST, repeat );
+
+		newStart2->nfaOut->append( trans );
+		fsm->attachToNfa( newStart1, origStartState, trans );
+	}
+
+	for ( StateSet::Iter orig = origFinals; orig.lte(); orig++ ) {
+		/* For every final state, we place a new final state in front of it,
+		 * with an NFA transition to the original. This is the "stay" choice. */
+		StateAp *repl = fsm->addState();
+		fsm->moveInwardTrans( repl, *orig );
+
+		repl->nfaOut = new NfaTransList;
+
+		if ( stay != 0 ) {
+			/* Transition to original final state. Represents staying. */
+			trans = new NfaTrans( orderStay );
+
+			trans->pushTable.setAction( ORD_PUSH, push );
+			trans->restoreTable.setAction( ORD_RESTORE, pop );
+			trans->popTest.setAction( ORD_TEST, stay );
+
+			repl->nfaOut->append( trans );
+			fsm->attachToNfa( repl, *orig, trans );
+		}
+
+		/* Transition back to the start. Represents repeat. */
+		if ( repeat != 0 ) {
+			trans = new NfaTrans( orderRepeat );
+
+			trans->pushTable.setAction( ORD_PUSH, push );
+			trans->restoreTable.setAction( ORD_RESTORE, pop );
+			trans->popTest.setAction( ORD_TEST, repeat );
+
+			fsm->transferOutToNfaTrans( trans, *orig );
+			repl->fromStateActionTable.setActions( (*orig)->fromStateActionTable );
+
+			repl->nfaOut->append( trans );
+			fsm->attachToNfa( repl, repStartState, trans );
+		}
+
+		if ( exit != 0 ) {
+			/* Transition to thew new final. Represents exiting. */
+			trans = new NfaTrans( orderExit );
+
+			trans->pushTable.setAction( ORD_PUSH, push );
+			trans->restoreTable.setAction( ORD_RESTORE, pop );
+			trans->popTest.setAction( ORD_TEST, exit );
+
+			fsm->transferOutToNfaTrans( trans, *orig );
+			repl->fromStateActionTable.setActions( (*orig)->fromStateActionTable );
+
+			repl->nfaOut->append( trans );
+			fsm->attachToNfa( repl, newFinal, trans );
+		}
+
+		fsm->unsetFinState( *orig );
+	}
+
+	fsm->unsetStartState();
+	fsm->setStartState( newStart1 );
+	fsm->setFinState( newFinal );
+
+	return FsmRes( FsmRes::Fsm(), fsm );
+}
+
 
 /* This version contains the init, increment and test in the nfa pop actions.
  * This is a compositional operator since it doesn't leave any actions to
@@ -168,7 +375,8 @@ FsmRes FsmAp::nfaRepeatOp( FsmAp *fsm, Action *push, Action *pop, Action *init,
 	NfaTrans *trans;
 	if ( init ) {
 		/* Transition into the repetition. Doesn't make much sense to flip this
-		 * statically false, but provided for consistency of interface. */
+		 * statically false, but provided for consistency of interface. Allows
+		 * an init so we can have only local state manipulation. */
 		trans = new NfaTrans( 1 );
 
 		trans->pushTable.setAction( ORD_PUSH, push );
@@ -189,9 +397,13 @@ FsmRes FsmAp::nfaRepeatOp( FsmAp *fsm, Action *push, Action *pop, Action *init,
 
 		repl->nfaOut = new NfaTransList;
 
+		const int orderStay =   3;
+		const int orderRepeat = 2;
+		const int orderExit =   1;
+
 		if ( stay != 0 ) {
 			/* Transition to original final state. Represents staying. */
-			trans = new NfaTrans( 3 );
+			trans = new NfaTrans( orderStay );
 
 			trans->pushTable.setAction( ORD_PUSH, push );
 			trans->restoreTable.setAction( ORD_RESTORE, pop );
@@ -203,7 +415,7 @@ FsmRes FsmAp::nfaRepeatOp( FsmAp *fsm, Action *push, Action *pop, Action *init,
 
 		/* Transition back to the start. Represents repeat. */
 		if ( repeat != 0 ) {
-			trans = new NfaTrans( 2 );
+			trans = new NfaTrans( orderRepeat );
 
 			trans->pushTable.setAction( ORD_PUSH, push );
 			trans->restoreTable.setAction( ORD_RESTORE, pop );
@@ -218,7 +430,7 @@ FsmRes FsmAp::nfaRepeatOp( FsmAp *fsm, Action *push, Action *pop, Action *init,
 
 		if ( exit != 0 ) {
 			/* Transition to thew new final. Represents exiting. */
-			trans = new NfaTrans( 1 );
+			trans = new NfaTrans( orderExit );
 
 			trans->pushTable.setAction( ORD_PUSH, push );
 			trans->restoreTable.setAction( ORD_RESTORE, pop );
@@ -381,7 +593,9 @@ FsmRes FsmAp::nfaUnionOp( FsmAp *fsm, FsmAp **others, int n, int depth, ostream 
 	return FsmRes( FsmRes::Fsm(), fsm );
 }
 
-FsmRes FsmAp::nfaUnion( const NfaRoundVect &roundsList, FsmAp **machines, int numMachines, std::ostream &stats, bool printStatistics )
+FsmRes FsmAp::nfaUnion( const NfaRoundVect &roundsList,
+		FsmAp **machines, int numMachines,
+		std::ostream &stats, bool printStatistics )
 {
 	long sumPlain = 0, sumMin = 0;
 	for ( int i = 0; i < numMachines; i++ ) {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -54,10 +54,34 @@ struct LongestMatchPart;
 
 string itoa( int i );
 
+struct Variable
+{
+	Variable( const char *name ) : name(name), isReferenced(false) {}
+
+	operator const std::string() { isReferenced = true; return name; }
+	void reference() { isReferenced = true; }
+
+	const char *name;
+	bool isReferenced;
+};
+
+struct GotoLabel
+{
+	GotoLabel( const char *name ) : name(name), isReferenced(false) {}
+
+	operator std::string() { isReferenced = true; return name; }
+	void reference() { isReferenced = true; }
+
+	const char *name;
+	bool isReferenced;
+};
+
+std::ostream &operator<<( std::ostream &out, GotoLabel &l );
+std::ostream &operator<<( std::ostream &out, Variable &v );
+
 struct TableArray;
 typedef Vector<TableArray*> ArrayVector;
 struct CodeGen;
-
 
 struct TableArray
 {
@@ -80,7 +104,7 @@ struct TableArray
 		this->isChar = isChar;
 	}
 
-	std::string ref() const;
+	std::string ref();
 
 	void value( long long v );
 
@@ -111,6 +135,8 @@ struct TableArray
 	CodeGen &codeGen;
 	std::ostream &out;
 	int ln;
+	bool isReferenced;
+	bool started;
 };
 
 struct IlOpts
@@ -145,15 +171,20 @@ protected:
 	typedef Vector<TableArray*> ArrayVector;
 	ArrayVector arrayVector;
 
+	Variable cpc;
+	Variable pop_test;
+	Variable new_recs;
+	Variable alt;
+
 	string FSM_NAME();
 	string START_STATE_ID();
 	void taActions();
-	string TABS( int level );
 	string KEY( Key key );
 	string LDIR_PATH( char *path );
 
 	void ACTION( ostream &ret, GenAction *action, IlOpts opts );
 	void NFA_CONDITION( ostream &ret, GenAction *condition, bool last );
+	void NFA_POP_TEST_EXEC();
 	void CONDITION( ostream &ret, GenAction *condition );
 	string ALPH_TYPE();
 
@@ -162,6 +193,11 @@ protected:
 	RagelBackend backend;
 	bool stringTables;
 	BackendFeature backendFeature;
+
+	TableArray nfaTargs;
+	TableArray nfaOffsets;
+	TableArray nfaPushActions;
+	TableArray nfaPopTrans;
 
 	virtual string GET_KEY();
 
@@ -182,19 +218,20 @@ protected:
 	string ERROR() { return DATA_PREFIX() + "error"; }
 	string FIRST_FINAL() { return DATA_PREFIX() + "first_final"; }
 
+	/* Declare a variable only if referenced. */
+	void DECLARE( std::string type, Variable &var, std::string init = "" );
+
 	string CAST( string type );
 
 	string ARR_TYPE( const TableArray &ta )
 		{ return ta.type; }
 
-	string ARR_REF( const TableArray &ta )
+	string ARR_REF( TableArray &ta )
 		{ return ta.ref(); }
 
 	void INLINE_EXPR( ostream &ret, GenInlineList *inlineList );
 	void INLINE_BLOCK( ostream &ret, GenInlineExpr *inlineExpr );
 	void INLINE_PLAIN( ostream &ret, GenInlineExpr *inlineExpr );
-
-	void EOF_CHECK( ostream &ret );
 
 	void INLINE_LIST( ostream &ret, GenInlineList *inlineList, 
 			int targState, bool inFinish, bool csForced );
@@ -238,12 +275,6 @@ protected:
 
 	string STR( int v );
 
-	bool outLabelUsed;
-	bool testEofUsed;
-	bool againLabelUsed;
-	bool useIndicies;
-	bool matchCondLabelUsed;
-
 	void VALUE( string type, string name, string value );
 
 	string ACCESS_OPER()
@@ -263,10 +294,10 @@ protected:
 	string OPEN_HOST_BLOCK( string fileName, int line )
 	{ 
 		if ( backend == Direct ) {
-			if ( lineDirectives )
-				return "{\n#line " + STR(line) + " \"" + fileName + "\"\n";
-			else
-				return "{\n";
+			std::stringstream ss;
+			ss << "{\n" ;
+			(*genLineDirective)( ss, lineDirectives, line, fileName.c_str() );
+			return ss.str();
 		}
 		else {
 			return "host( \"" + fileName + "\", " + STR(line) + " ) ${";
@@ -279,7 +310,7 @@ protected:
 	}
 
 	string CLOSE_HOST_BLOCK()
-		{ return backend == Direct ? "}" : "}$"; }
+		{ return backend == Direct ? "}\n" : "}$"; }
 
 	string OPEN_HOST_PLAIN()
 		{ return backend == Direct ? "" : "host( \"-\", 1 ) @{"; }
@@ -305,6 +336,9 @@ protected:
 	string CLOSE_GEN_PLAIN()
 		{ return backend == Direct ? "" : "}@"; }
 	
+	string INT()
+		{ return "int"; }
+
 	string UINT()
 		{ return backend == Direct ? "unsigned int" : "uint"; }
 
@@ -316,20 +350,25 @@ protected:
 			return "index " + type + " " + name;
 	}
 
-	string ENTRY()
+	string INDEX( string type )
 	{
 		if ( backend == Direct )
-			return "";
+			return "const " + type + " *";
 		else
-			return "entry";
+			return "index " + type + " ";
 	}
 
 	string LABEL( string name )
 	{
-		if ( backend == Direct )
-			return name + ": ";
+		return name + ": ";
+	}
+
+	string EMIT_LABEL( GotoLabel label )
+	{
+		if ( label.isReferenced )
+			return std::string(label.name) + ": {}\n";
 		else
-			return "label " + name;
+			return "";
 	}
 
 	string OFFSET( string arr, string off )
@@ -403,6 +442,17 @@ protected:
 		else
 			return "export " + type + " " + name + " " + value + ";";
 	}
+
+	void NFA_POST_POP();
+	virtual void NFA_PUSH( std::string );
+	virtual void NFA_POP() = 0;
+	virtual void LOCATE_TRANS() {}
+	virtual void LOCATE_COND() {}
+	virtual void EOF_TRANS() {}
+
+
+	virtual void COND_EXEC( std::string expr ) {}
+	virtual void COND_BIN_SEARCH( Variable &var, TableArray &keys, std::string ok, std::string error ) {}
 
 public:
 	virtual void writeExports();

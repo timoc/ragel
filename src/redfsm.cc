@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2006 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -26,6 +26,7 @@
 #include "fsmgraph.h"
 #include <iostream>
 #include <sstream>
+#include <ctime>
 
 using std::ostringstream;
 
@@ -69,6 +70,7 @@ RedFsmAp::RedFsmAp( FsmCtx *fsmCtx, int machineId )
 	bAnyRegActions(false),
 	bAnyEofActions(false),
 	bAnyEofTrans(false),
+	bAnyEofActivity(false),
 	bAnyActionGotos(false),
 	bAnyActionCalls(false),
 	bAnyActionNcalls(false),
@@ -441,7 +443,7 @@ void RedFsmAp::randomizedOrdering()
 
 	for ( int i = nextStateId; i > 0; i-- ) {
 		/* Pick one from 0 ... i (how many are left). */
-		int nth = random() % i;
+		int nth = rand() % i;
 
 		/* Go forward through the list adding the nth. Need to scan because
 		 * there are items already added in the list. */
@@ -1060,27 +1062,12 @@ void RedFsmAp::chooseDefaultNumRanges()
 
 RedCondAp *RedFsmAp::getErrorCond()
 {
-	if ( errCond == 0 ) {
-		/* Create the cond transition. This should also always succeed. */
-		errCond = new RedCondAp( getErrorState(), 0, nextCondId++ );
-		RedCondAp *inCondSet = condSet.insert( errCond );
-		assert( inCondSet != 0 );
-	}
-	return errCond;
+	return allocateCond( getErrorState(), 0 );
 }
 
 RedTransAp *RedFsmAp::getErrorTrans()
 {
-	/* If the error trans has not been made aready, make it. */
-	if ( errTrans == 0 ) {
-		/* This insert should always succeed. No transition created by the user
-		 * can point to the error state. */
-		errTrans = new RedTransAp( nextTransId++, nextCondId++, getErrorState(), 0 );
-		RedTransAp *inTransSet = transSet.insert( errTrans );
-		assert( inTransSet != 0 );
-
-	}
-	return errTrans;
+	return allocateTrans( getErrorState(), 0 );
 }
 
 RedStateAp *RedFsmAp::getErrorState()

@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2016 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -74,9 +74,6 @@ struct PriorInteraction
 	PriorInteraction( long long id ) : id(id) {}
 	long long id;
 };
-
-struct RepetitionError {};
-struct TransDensity {};
 
 struct NfaRound
 {
@@ -707,6 +704,7 @@ struct NfaTrans
 
 	NfaTrans( const ActionTable &pushTable,
 			const ActionTable &restoreTable,
+			const ActionTable &popFrom,
 			CondSpace *popCondSpace,
 			const CondKeySet popCondKeys,
 			const ActionTable &popAction,
@@ -717,6 +715,7 @@ struct NfaTrans
 		order(order),
 		pushTable(pushTable),
 		restoreTable(restoreTable),
+		popFrom(popFrom),
 		popCondSpace(popCondSpace),
 		popCondKeys(popCondKeys),
 		popAction(popAction),
@@ -750,6 +749,7 @@ struct NfaTrans
 	 * 2. Actions transferred
 	 * 3. Pop actions created during epsilon draw. 
 	 */
+	ActionTable popFrom;
 	CondSpace *popCondSpace;
 	CondKeySet popCondKeys;
 
@@ -1017,15 +1017,13 @@ struct CondData
 
 struct FsmGbl
 {
-	FsmGbl()
+	FsmGbl( const HostLang *hostLang )
 	:
 		printStatistics(false),
 		errorCount(0),
-		//inLibRagel(false),
 		displayPrintables(false),
-		backend(Direct),
+		hostLang(hostLang),
 		stringTables(false),
-		backendFeature(GotoFeature),
 		checkPriorInteraction(0),
 		wantDupsRemoved(true),
 		minimizeLevel(MinimizePartition2),
@@ -1060,13 +1058,11 @@ struct FsmGbl
 	std::stringstream libcout;
 
 	int errorCount;
-	//bool inLibRagel;
 	void abortCompile( int code );
 	bool displayPrintables;
 
-	RagelBackend backend;
+	const HostLang *hostLang;
 	bool stringTables;
-	BackendFeature backendFeature;
 	bool checkPriorInteraction;
 	bool wantDupsRemoved;
 
@@ -1264,7 +1260,7 @@ struct StateAp
 	/* Actions to add to any future transitions that leave via this state. */
 	ActionTable outActionTable;
 
-	/* Conditions to add to any future transiions that leave via this sttate. */
+	/* Conditions to add to any future transiions that leave via this state. */
 	CondSpace *outCondSpace;
 	CondKeySet outCondKeys;
 
@@ -1278,6 +1274,11 @@ struct StateAp
 	LmItemSet lmItemSet;
 
 	PriorTable guardedInTable;
+
+	/* Used by the NFA-based scanner to track the origin of final states. We
+	 * only use it in cases where just one match is possible, starting with the
+	 * final state duplicates that are drawn using NFA transitions. */
+	LmItemSet lmNfaParts;
 };
 
 /* Return and re-entry for the co-routine iterators. This should ALWAYS be
@@ -1858,7 +1859,6 @@ struct FsmRes
 	struct TooManyStates {};
 	struct PriorInteraction {};
 	struct CondCostTooHigh {};
-	struct RepetitionError {};
 	struct InternalError {};
 
 	enum Type
@@ -1867,7 +1867,6 @@ struct FsmRes
 		TypeTooManyStates,
 		TypePriorInteraction,
 		TypeCondCostTooHigh,
-		TypeRepetitionError,
 		TypeInternalError,
 	};
 
@@ -1883,13 +1882,16 @@ struct FsmRes
 	FsmRes( const CondCostTooHigh &, long long costId )
 		: fsm(0), type(TypeCondCostTooHigh), id(costId) {}
 
-	FsmRes( const RepetitionError & )
-		: fsm(0), type(TypeRepetitionError) {}
-
 	FsmRes( const InternalError & )
 		: fsm(0), type(TypeInternalError) {}
 
-	bool success() { return fsm != 0; }
+	bool success()
+		{ return fsm != 0; }
+
+	operator FsmAp*()
+		{ return type == TypeFsm ? fsm : 0; }
+	FsmAp *operator->()
+		{ return type == TypeFsm ? fsm : 0; }
 
 	FsmAp *fsm;
 	Type type;
@@ -2260,7 +2262,8 @@ public:
 	static FsmRes minRepeatOp( FsmAp *fsm, int times );
 	static FsmRes rangeRepeatOp( FsmAp *fsm, int lower, int upper );
 
-	static FsmRes concatOp( FsmAp *fsm, FsmAp *other, bool lastInSeq = true, StateSet *fromStates = 0, bool optional = false );
+	static FsmRes concatOp( FsmAp *fsm, FsmAp *other, bool lastInSeq = true,
+			StateSet *fromStates = 0, bool optional = false );
 	static FsmRes unionOp( FsmAp *fsm, FsmAp *other, bool lastInSeq = true );
 	static FsmRes intersectOp( FsmAp *fsm, FsmAp *other, bool lastInSeq = true );
 	static FsmRes subtractOp( FsmAp *fsm, FsmAp *other, bool lastInSeq = true );
@@ -2271,10 +2274,23 @@ public:
 
 	void transferOutToNfaTrans( NfaTrans *trans, StateAp *state );
 
+	enum NfaRepeatMode {
+		NfaLegacy = 1,
+		NfaGreedy,
+		NfaLazy
+	};
+
+	static FsmRes applyNfaTrans( FsmAp *fsm, StateAp *fromState, StateAp *toState, NfaTrans *nfaTrans );
+
 	/* Results in an NFA. */
 	static FsmRes nfaUnionOp( FsmAp *fsm, FsmAp **others, int n, int depth, std::ostream &stats );
 	static FsmRes nfaRepeatOp( FsmAp *fsm, Action *push, Action *pop, Action *init,
 			Action *stay, Action *repeat, Action *exit );
+
+	static FsmRes nfaRepeatOp2( FsmAp *fsm, Action *push, Action *pop, Action *init,
+			Action *stay, Action *repeat, Action *exit, NfaRepeatMode mode = NfaGreedy );
+	static FsmRes nfaWrap( FsmAp *fsm, Action *push, Action *pop, Action *init,
+			Action *stay, Action *exit, NfaRepeatMode mode = NfaGreedy );
 
 	static FsmRes nfaUnion( const NfaRoundVect &roundsList, FsmAp **machines,
 			int numMachines, std::ostream &stats, bool printStatistics );
@@ -2375,6 +2391,9 @@ public:
 	/* Mark all states reachable from state. */
 	void markReachableFromHere( StateAp *state );
 	void markReachableFromHereStopFinal( StateAp *state );
+
+	/* Any transitions to another state? */
+	bool anyRegularTransitions( StateAp *state );
 
 	/* Removes states that cannot be reached by any path in the fsm and are
 	 * thus wasted silicon. */

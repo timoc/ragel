@@ -1,5 +1,5 @@
 /*
- * Copyright 2006-2007 Adrian Thurston <thurston@colm.net>
+ * Copyright 2006-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -27,8 +27,57 @@
 #include <assert.h>
 #include "ragel.h"
 
+/*
+ * C
+ */
+
+const char *defaultOutFnC( const char *inputFileName )
+{
+	const char *ext = findFileExtension( inputFileName );
+	if ( ext != 0 && strcmp( ext, ".rh" ) == 0 )
+		return fileNameFromStem( inputFileName, ".h" );
+	else
+		return fileNameFromStem( inputFileName, ".c" );
+}
 
 HostType hostTypesC[] =
+{
+	{ "char",      0,      "char",    true,   true,  false,  CHAR_MIN,  CHAR_MAX,   0, 0,          sizeof(char) },
+	{ "signed",   "char",  "char",    true,   true,  false,  CHAR_MIN,  CHAR_MAX,   0, 0,          sizeof(char) },
+	{ "unsigned", "char",  "uchar",   false,  true,  false,  0, 0,                  0, UCHAR_MAX,  sizeof(unsigned char) },
+	{ "short",     0,      "short",   true,   true,  false,  SHRT_MIN,  SHRT_MAX,   0, 0,          sizeof(short) },
+	{ "signed",   "short", "short",   true,   true,  false,  SHRT_MIN,  SHRT_MAX,   0, 0,          sizeof(short) },
+	{ "unsigned", "short", "ushort",  false,  true,  false,  0, 0,                  0, USHRT_MAX,  sizeof(unsigned short) },
+	{ "int",       0,      "int",     true,   true,  false,  INT_MIN,   INT_MAX,    0, 0,          sizeof(int) },
+	{ "signed",   "int",   "int",     true,   true,  false,  INT_MIN,   INT_MAX,    0, 0,          sizeof(int) },
+	{ "unsigned", "int",   "uint",    false,  true,  false,  0, 0,                  0, UINT_MAX,   sizeof(unsigned int) },
+	{ "long",      0,      "long",    true,   true,  false,  LONG_MIN,  LONG_MAX,   0, 0,          sizeof(long) },
+	{ "signed",   "long",  "long",    true,   true,  false,  LONG_MIN,  LONG_MAX,   0, 0,          sizeof(long) },
+	{ "unsigned", "long",  "ulong",   false,  true,  false,  0, 0,                  0, ULONG_MAX,  sizeof(unsigned long) },
+};
+
+const HostLang hostLangC = {
+	hostTypesC,
+	12,
+	0,
+	true,
+	false, /* loopLabels */
+	Direct,
+	GotoFeature,
+	&makeCodeGen,
+	&defaultOutFnC,
+	&genLineDirectiveC
+};
+
+/*
+ * ASM
+ */
+const char *defaultOutFnAsm( const char *inputFileName )
+{
+	return fileNameFromStem( inputFileName, ".s" );
+}
+
+HostType hostTypesAsm[] =
 {
 	{ "char",     0,       "char",    true,   true,  false,  CHAR_MIN,  CHAR_MAX,   0, 0,          sizeof(char) },
 	{ "unsigned", "char",  "uchar",   false,  true,  false,  0, 0,                  0, UCHAR_MAX,  sizeof(unsigned char) },
@@ -40,246 +89,18 @@ HostType hostTypesC[] =
 	{ "unsigned", "long",  "ulong",   false,  true,  false,  0, 0,                  0, ULONG_MAX,  sizeof(unsigned long) },
 };
 
-
-HostType hostTypesD[] =
-{
-	{ "byte",    0,  "byte",    true,   true,  false,  CHAR_MIN,  CHAR_MAX,    0, 0,           1 },
-	{ "ubyte",   0,  "ubyte",   false,  true,  false,  0, 0,                   0, UCHAR_MAX,   1 },
-	{ "char",    0,  "char",    false,  true,  false,  0, 0,                   0, UCHAR_MAX,   1 },
-	{ "short",   0,  "short",   true,   true,  false,  SHRT_MIN,  SHRT_MAX,    0, 0,           2 },
-	{ "ushort",  0,  "ushort",  false,  true,  false,  0, 0,                   0, USHRT_MAX,   2 },
-	{ "wchar",   0,  "wchar",   false,  true,  false,  0, 0,                   0, USHRT_MAX,   2 },
-	{ "int",     0,  "int",     true,   true,  false,  INT_MIN,   INT_MAX,     0, 0,           4 },
-	{ "uint",    0,  "uint",    false,  true,  false,  0, 0,                   0, UINT_MAX,    4 },
-	{ "dchar",   0,  "dchar",   false,  true,  false,  0, 0,                   0, UINT_MAX,    4 },
-};
-
-HostType hostTypesGo[] = 
-{
-	{ "byte",    0,  "uint8",   false,  true,  false,  0, 0,                    U8BIT_MIN,  U8BIT_MAX,   1 },
-	{ "int8",    0,  "int8",    true,   true,  false,  S8BIT_MIN,  S8BIT_MAX,   0, 0,                    1 },
-	{ "uint8",   0,  "uint8",   false,  true,  false,  0, 0,                    U8BIT_MIN,  U8BIT_MAX,   1 },
-	{ "int16",   0,  "int16",   true,   true,  false,  S16BIT_MIN, S16BIT_MAX,  0, 0,                    2 },
-	{ "uint16",  0,  "uint16",  false,  true,  false,  0, 0,                    U16BIT_MIN, U16BIT_MAX,  2 },
-	{ "int32",   0,  "int32",   true,   true,  false,  S32BIT_MIN, S32BIT_MAX,  0, 0,                    4 },
-	{ "uint32",  0,  "uint32",  false,  true,  false,  0, 0,                    U32BIT_MIN, U32BIT_MAX,  4 },
-	{ "int64",   0,  "int64",   true,   true,  false,  S64BIT_MIN, S64BIT_MAX,  0, 0,                    8 },
-	{ "uint64",  0,  "uint64",  false,  true,  false,  0, 0,                    U64BIT_MIN, U64BIT_MAX,  8 },
-	{ "rune",    0,  "int32",   true,   true,  true,   S32BIT_MIN, S32BIT_MAX,  0, 0,                    4 },
-};
-
-HostType hostTypesJava[] = 
-{
-	{ "byte",    0,  "byte",   true,   true,  false,  CHAR_MIN,  CHAR_MAX,    0, 0,           1 },
-	{ "short",   0,  "short",  true,   true,  false,  SHRT_MIN,  SHRT_MAX,    0, 0,           2 },
-	{ "char",    0,  "char",   false,  true,  false,  0, 0,                   0, USHRT_MAX,   2 },
-	{ "int",     0,  "int",    true,   true,  false,  INT_MIN,   INT_MAX,     0, 0,           4 },
-};
-
-/* What are the appropriate types for ruby? */
-HostType hostTypesRuby[] = 
-{
-	{ "char",    0,  "char",   true,   true,  false,  CHAR_MIN,  CHAR_MAX,    0, 0, 1 },
-	{ "int",     0,  "int",    true,   true,  false,  INT_MIN,   INT_MAX,     0, 0, 4 },
-};
-
-HostType hostTypesCSharp[] =
-{
-	{ "sbyte",   0,  "sbyte",   true,   true,  false,  CHAR_MIN,  CHAR_MAX,    0, 0,           1 },
-	{ "byte",    0,  "byte",    false,  true,  false,  0, 0,                   0, UCHAR_MAX,   1 },
-	{ "short",   0,  "short",   true,   true,  false,  SHRT_MIN,  SHRT_MAX,    0, 0,           2 },
-	{ "ushort",  0,  "ushort",  false,  true,  false,  0, 0,                   0, USHRT_MAX,   2 },
-	{ "char",    0,  "char",    false,  true,  true,   0, 0,                   0, USHRT_MAX,   2 },
-	{ "int",     0,  "int",     true,   true,  false,  INT_MIN,   INT_MAX,     0, 0,           4 },
-	{ "uint",    0,  "uint",    false,  true,  false,  0, 0,                   0, UINT_MAX,    4 },
-	{ "long",    0,  "long",    true,   true,  false,  LONG_MIN,  LONG_MAX,    0, 0,           8 },
-	{ "ulong",   0,  "ulong",   false,  true,  false,  0, 0,                   0, ULONG_MAX,   8 },
-};
-
-HostType hostTypesOCaml[] =
-{
-	{ "int",    0,  "int",      true,   true,  false,  S31BIT_MIN, S31BIT_MAX,  0, 0, 4 },
-};
-
-HostType hostTypesCrack[] = 
-{
-	{ "byte",    0,  "byte",     false,  true,  true,   0, 0,                     0, UCHAR_MAX,    1 },
-	{ "int32",   0,  "int32",    true,   true,  false,  S32BIT_MIN,  S32BIT_MAX,  0, 0,            4 },
-	{ "uint32",  0,  "uint32",   false,  true,  false,  0, 0,                     0, U32BIT_MAX,   4 },
-	{ "int",     0,  "int",      true,   true,  false,  INT_MIN,     INT_MAX,     0, 0,            sizeof(int) },
-	{ "uint",    0,  "uint",     false,  true,  false,  0, 0,                     0, UINT_MAX,     sizeof(int) },  
-};
-
-HostType hostTypesRust[] =
-{
-	{ "u8",    0,  "byte",      true,   true,  false,  0, UCHAR_MAX,  0, 0, 4 },
-};
-
-HostType hostTypesJulia[] =
-{
-	{ "u8",    0,  "byte",      true,   true,  false,  0, UCHAR_MAX,  0, 0, 4 },
-};
-
-HostType hostTypesJS[] =
-{
-	{ "s8",     0, "int8",    true,   true,  false,  CHAR_MIN,  CHAR_MAX,   0, 0,          1 },
-	{ "u8",     0, "uint8",   false,  true,  false,  0, 0,                  0, UCHAR_MAX,  1 },
-	{ "s16",    0, "int16",   true,   true,  false,  SHRT_MIN,  SHRT_MAX,   0, 0,          2 },
-	{ "u16",    0, "uint16",  false,  true,  false,  0, 0,                  0, USHRT_MAX,  2 },
-	{ "i32",    0, "int32",   true,   true,  false,  INT_MIN,   INT_MAX,    0, 0,          4 },
-	{ "u32",    0, "uint32",  false,  true,  false,  0, 0,                  0, UINT_MAX,   4 },
-	{ "number", 0, "number",  true,   true,  false,  LONG_MIN,  LONG_MAX,   0, 0,          8 },
-};
-
-const HostLang hostLangC = {
-	"C",
-	"-C",
-	HostLang::C,
-	hostTypesC, 8,
-	hostTypesC+0,
-	true,
-	false,
-	"c"
-};
-
 const HostLang hostLangAsm = {
-	"ASM",
-	"--asm",
-	HostLang::Asm,
-	hostTypesC, 8,
-	hostTypesC+0,
+	hostTypesAsm,
+	8,
+	0,
 	true,
-	false,
-	"no-lang"
+	false, /* loopLabels */
+	Direct,
+	GotoFeature,
+	&makeCodeGenAsm,
+	&defaultOutFnC,
+	&genLineDirectiveAsm
 };
-
-const HostLang hostLangD = {
-	"D",
-	"-D",
-	HostLang::D,
-	hostTypesD, 9,
-	hostTypesD+2,
-	true,
-	true,
-	"d"
-};
-
-const HostLang hostLangGo = {
-	"Go",
-	"-Z",
-	HostLang::Go,
-	hostTypesGo, 10,
-	hostTypesGo+0,
-	false,
-	true,
-	"go"
-};
-
-const HostLang hostLangJava = {
-	"Java",
-	"-J",
-	HostLang::Java,
-	hostTypesJava, 4,
-	hostTypesJava+2,
-	false,
-	true,
-	"java"
-};
-
-const HostLang hostLangRuby = {
-	"Ruby",
-	"-R",
-	HostLang::Ruby,
-	hostTypesRuby, 2,
-	hostTypesRuby+0,
-	false,
-	true,
-	"ruby"
-};
-
-const HostLang hostLangCSharp = {
-	"C#",
-	"-A",
-	HostLang::CSharp,
-	hostTypesCSharp, 9,
-	hostTypesCSharp+4,
-	true,
-	true,
-	"csharp"
-};
-
-const HostLang hostLangOCaml = {
-	"OCaml",
-	"-O",
-	HostLang::OCaml,
-	hostTypesOCaml, 1,
-	hostTypesOCaml+0,
-	false,
-	true,
-	"ocaml"
-};
-
-const HostLang hostLangCrack = {
-	"Crack",
-	"-K",
-	HostLang::Crack,
-	hostTypesCrack, 5,
-	hostTypesCrack+0,
-	true,
-	true,
-	"crack"
-};
-
-const HostLang hostLangRust = {
-	"Rust",
-	"-U",
-	HostLang::Rust,
-	hostTypesRust, 1,
-	hostTypesRust+0,
-	false,
-	true,
-	"rust"
-};
-
-const HostLang hostLangJulia = {
-	"Julia",
-	"-Y",
-	HostLang::Julia,
-	hostTypesJulia, 1,
-	hostTypesJulia+0,
-	false,
-	true,
-	"julia"
-};
-
-const HostLang hostLangJS = {
-	"JavaScript",
-	"-P",
-	HostLang::JS,
-	hostTypesJS, 7,
-	hostTypesJS+1,
-	false,
-	true,
-	"js"
-};
-
-const HostLang *hostLangs[] = {
-	&hostLangC,
-	&hostLangAsm,
-	&hostLangD,
-	&hostLangGo,
-	&hostLangJava,
-	&hostLangRuby,
-	&hostLangCSharp,
-	&hostLangOCaml,
-	&hostLangRust,
-	&hostLangCrack,
-	&hostLangJulia,
-	&hostLangJS,
-};
-
-
-const int numHostLangs = sizeof(hostLangs)/sizeof(hostLangs[0]);
 
 HostType *findAlphType( const HostLang *hostLang, const char *s1 )
 {
@@ -447,13 +268,6 @@ bool ParamCheck::check()
 	return true;
 }
 
-/* Counts newlines before sending sync. */
-int output_filter::sync( )
-{
-	line += 1;
-	return std::filebuf::sync();
-}
-
 std::streamsize output_filter::countAndWrite( const char *s, std::streamsize n )
 {
 	for ( int i = 0; i < n; i++ ) {
@@ -462,6 +276,9 @@ std::streamsize output_filter::countAndWrite( const char *s, std::streamsize n )
 			line += 1;
 			break;
 		case '{':
+			/* If we detec an open block then eliminate the single-indent
+			 * addition, which is to account for single statements. */
+			singleIndent = false;
 			level += 1;
 			break;
 		case '}':
@@ -471,6 +288,27 @@ std::streamsize output_filter::countAndWrite( const char *s, std::streamsize n )
 	}
 
 	return std::filebuf::xsputn( s, n );
+}
+
+bool openSingleIndent( const char *s, int n )
+{
+	if ( n >= 3 && memcmp( s, "if ", 3 ) == 0 )
+		return true;
+
+	if ( n >= 8 && memcmp( s, "else if ", 8 ) == 0 )
+		return true;
+
+	if ( n >= 5 && memcmp( s, "else\n", 4 ) == 0 )
+		return true;
+
+	return false;
+}
+
+/* Counts newlines before sending sync. */
+int output_filter::sync( )
+{
+	line += 1;
+	return std::filebuf::sync();
 }
 
 /* Counts newlines before sending data out to file. */
@@ -488,7 +326,7 @@ restart:
 		}
 
 		if ( n > 0 ) {
-			int tabs = level;
+			int tabs = level + ( singleIndent ? 1 : 0 );
 
 			if ( *s == '}' ) {
 				/* If the next char is de-dent, then reduce the tabs. This is
@@ -497,10 +335,20 @@ restart:
 				tabs -= 1;
 			}
 
-			/* Found some data, print the indentation and turn off indentation
-			 * mode. */
-			for ( l = 0; l < tabs; l++ )
-				countAndWrite( "\t", 1 );
+			/* Note that the count and write will eliminate this if it detects
+			 * an open block. */
+			if ( openSingleIndent( s, n ) )
+				singleIndent = true;
+			else
+				singleIndent = false;
+
+			if ( *s != '#' ) {
+				/* Found some data, print the indentation and turn off indentation
+				 * mode. */
+				for ( l = 0; l < tabs; l++ )
+					countAndWrite( "\t", 1 );
+			}
+
 
 			indent = 0;
 
@@ -590,4 +438,45 @@ void operator<<( std::ostream &out, exit_object & )
 {
 	out << std::endl;
 	throw AbortCompile( 1 );
+}
+
+void genLineDirectiveC( std::ostream &out, bool lineDirectives, int line, const char *fileName )
+{
+	if ( !lineDirectives )
+		out << "/* ";
+
+	out << "#line " << line  << " \"";
+	for ( const char *pc = fileName; *pc != 0; pc++ ) {
+		if ( *pc == '\\' )
+			out << "\\\\";
+		else if ( *pc == '"' )
+			out << "\\\"";
+		else
+			out << *pc;
+	}
+	out << '"';
+
+	if ( !lineDirectives )
+		out << " */";
+
+	out << '\n';
+}
+
+void genLineDirectiveAsm( std::ostream &out, bool lineDirectives, int line, const char *fileName )
+{
+	out << "/* #line " << line  << " \"";
+	for ( const char *pc = fileName; *pc != 0; pc++ ) {
+		if ( *pc == '\\' )
+			out << "\\\\";
+		else if ( *pc == '"' )
+			out << "\\\"";
+		else
+			out << *pc;
+	}
+	out << '"';
+	out << " */\n";
+}
+
+void genLineDirectiveTrans( std::ostream &out, bool lineDirectives, int line, const char *fileName )
+{
 }

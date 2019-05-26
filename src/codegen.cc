@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -43,6 +43,20 @@ using std::ios;
 using std::cin;
 using std::endl;
 
+std::ostream &operator<<( std::ostream &out, Variable &v )
+{
+	out << v.name;
+	v.isReferenced = true;
+	return out;
+}
+
+std::ostream &operator<<( std::ostream &out, GotoLabel &l )
+{
+	out << l.name;
+	l.isReferenced = true;
+	return out;
+}
+
 TableArray::TableArray( const char *name, CodeGen &codeGen )
 :
 	state(InitialState),
@@ -63,13 +77,16 @@ TableArray::TableArray( const char *name, CodeGen &codeGen )
 
 	codeGen(codeGen),
 	out(codeGen.out),
-	ln(0)
+	ln(0),
+	isReferenced(false),
+	started(false)
 {
 	codeGen.arrayVector.append( this );
 }
 
-std::string TableArray::ref() const
+std::string TableArray::ref()
 {
+	isReferenced = true;
 	return string("_") + codeGen.DATA_PREFIX() + name;
 }
 
@@ -97,7 +114,7 @@ void TableArray::finishAnalyze()
 		/* Calculate the type if it is not already set. */
 		if ( type.empty() ) {
 			if ( min >= S8BIT_MIN && max <= S8BIT_MAX ) {
-				type = "char";
+				type = "signed char";
 				width = sizeof(char);
 			}
 			else if ( min >= S16BIT_MIN && max <= S16BIT_MAX ) {
@@ -286,6 +303,8 @@ void TableArray::finishGenerate()
 
 void TableArray::start()
 {
+	assert( !started );
+	started = true;
 	switch ( state ) {
 		case InitialState:
 			break;
@@ -293,13 +312,15 @@ void TableArray::start()
 			startAnalyze();
 			break;
 		case GeneratePass:
-			startGenerate();
+			if ( isReferenced )
+				startGenerate();
 			break;
 	}
 }
 
 void TableArray::value( long long v )
 {
+	assert( started );
 	switch ( state ) {
 		case InitialState:
 			break;
@@ -307,13 +328,16 @@ void TableArray::value( long long v )
 			valueAnalyze( v );
 			break;
 		case GeneratePass:
-			valueGenerate( v );
+			if ( isReferenced )
+				valueGenerate( v );
 			break;
 	}
 }
 
 void TableArray::finish()
 {
+	assert( started );
+	started = false;
 	switch ( state ) {
 		case InitialState:
 			break;
@@ -321,7 +345,8 @@ void TableArray::finish()
 			finishAnalyze();
 			break;
 		case GeneratePass:
-			finishGenerate();
+			if ( isReferenced )
+				finishGenerate();
 			break;
 	}
 }
@@ -330,9 +355,18 @@ void TableArray::finish()
 CodeGen::CodeGen( const CodeGenArgs &args )
 :
 	CodeGenData( args ),
+	cpc( "_cpc" ),
+	pop_test( "_pop_test" ),
+	new_recs( "new_recs" ),
+	alt( "_alt" ),
 	tableData( 0 ),
-	backend( args.id->backend ),
-	stringTables( args.id->stringTables )
+	backend( args.id->hostLang->backend ),
+	stringTables( args.id->stringTables ),
+
+	nfaTargs(         "nfa_targs",           *this ),
+	nfaOffsets(       "nfa_offsets",         *this ),
+	nfaPushActions(   "nfa_push_actions",    *this ),
+	nfaPopTrans(      "nfa_pop_trans",       *this )
 {
 }
 
@@ -513,16 +547,6 @@ string CodeGen::GET_KEY()
 	return ret.str();
 }
 
-/* Write out level number of tabs. Makes the nested binary search nice
- * looking. */
-string CodeGen::TABS( int level )
-{
-	string result;
-	while ( level-- > 0 )
-		result += "\t";
-	return result;
-}
-
 /* Write out a key from the fsm code gen. Depends on wether or not the key is
  * signed. */
 string CodeGen::KEY( Key key )
@@ -554,6 +578,12 @@ bool CodeGen::isAlphTypeSigned()
 	return keyOps->isSigned;
 }
 
+void CodeGen::DECLARE( std::string type, Variable &var, std::string init )
+{
+	if ( var.isReferenced )
+		out << type << " " << var.name << init << ";\n";
+}
+
 void CodeGen::EXEC( ostream &ret, GenInlineItem *item, int targState, int inFinish )
 {
 	/* The parser gives fexec two children. The double brackets are for D
@@ -580,7 +610,7 @@ void CodeGen::LM_SWITCH( ostream &ret, GenInlineItem *item,
 		/* Write the block and close it off. */
 		INLINE_LIST( ret, lma->children, targState, inFinish, csForced );
 
-		ret << CEND() << "}\n";
+		ret << CEND() << "\n}\n";
 	}
 
 	ret << 
@@ -725,7 +755,10 @@ void CodeGen::INLINE_LIST( ostream &ret, GenInlineList *inlineList,
 	for ( GenInlineList::Iter item = *inlineList; item.lte(); item++ ) {
 		switch ( item->type ) {
 		case GenInlineItem::Text:
-			translatedHostData( ret, item->data );
+			if ( backend == Direct )
+				ret << item->data;
+			else
+				translatedHostData( ret, item->data );
 			break;
 		case GenInlineItem::Goto:
 			GOTO( ret, item->targState->id, inFinish );
@@ -756,6 +789,9 @@ void CodeGen::INLINE_LIST( ostream &ret, GenInlineList *inlineList,
 			break;
 		case GenInlineItem::LmHold:
 			ret << P() << " = " << P() << " - 1;";
+			break;
+		case GenInlineItem::NfaClear:
+			ret << "nfa_len = 0; ";
 			break;
 		case GenInlineItem::Exec:
 			EXEC( ret, item, targState, inFinish );
@@ -850,21 +886,14 @@ string CodeGen::LDIR_PATH( char *path )
 	return ret.str();
 }
 
-void CodeGen::EOF_CHECK( ostream &ret )
-{
-	ret << 
-		"	if ( " << P() << " == " << PE() << " )\n"
-		"		goto _test_eof;\n";
-
-	testEofUsed = true;
-}
-
 void CodeGen::ACTION( ostream &ret, GenAction *action, IlOpts opts )
 {
 	ret << '\t';
 	ret << OPEN_HOST_BLOCK( action->loc.fileName, action->loc.line );
 	INLINE_LIST( ret, action->inlineList, opts.targState, opts.inFinish, opts.csForced );
 	ret << CLOSE_HOST_BLOCK();
+	ret << "\n";
+	genOutputLineDirective( ret );
 }
 
 void CodeGen::CONDITION( ostream &ret, GenAction *condition )
@@ -872,6 +901,8 @@ void CodeGen::CONDITION( ostream &ret, GenAction *condition )
 	ret << OPEN_HOST_EXPR( condition->loc.fileName, condition->loc.line );
 	INLINE_LIST( ret, condition->inlineList, 0, false, false );
 	ret << CLOSE_HOST_EXPR();
+	ret << "\n";
+	genOutputLineDirective( ret );
 }
 
 void CodeGen::NFA_CONDITION( ostream &ret, GenAction *condition, bool last )
@@ -882,14 +913,13 @@ void CodeGen::NFA_CONDITION( ostream &ret, GenAction *condition, bool last )
 	{
 		GenAction *action = condition->inlineList->head->wrappedAction;
 		ACTION( out, action, IlOpts( 0, false, false ) );
-		ret << "\n";
 	}
 	else if ( condition->inlineList->length() == 1 &&
 			condition->inlineList->head->type == 
 			GenInlineItem::NfaWrapConds )
 	{
 		ret <<
-			"	_cpc = 0;\n";
+			"	" << cpc << " = 0;\n";
 
 		GenCondSpace *condSpace = condition->inlineList->head->condSpace;
 		for ( GenCondSet::Iter csi = condSpace->condSet; csi.lte(); csi++ ) {
@@ -897,33 +927,67 @@ void CodeGen::NFA_CONDITION( ostream &ret, GenAction *condition, bool last )
 				"	if ( ";
 			CONDITION( out, *csi );
 			Size condValOffset = (1 << csi.pos());
-			ret << " ) _cpc += " << condValOffset << ";\n";
+			ret << " ) " << cpc << " += " << condValOffset << ";\n";
 		}
 
 		const CondKeySet &keys = condition->inlineList->head->condKeySet;
 		if ( keys.length() > 0 ) {
-			ret << "_pop_test = ";
+			ret << pop_test << " = ";
 			for ( CondKeySet::Iter cki = keys; cki.lte(); cki++ ) {
-				ret << "_cpc == " << *cki;
+				ret << "" << cpc << " == " << *cki;
 				if ( !cki.last() )
 					ret << " || ";
 			}
 			ret << ";\n";
 		}
 		else {
-			ret << "_pop_test = 0;\n";
+			ret << pop_test << " = 0;\n";
 		}
 
-		if ( !last )
-			ret << "if ( !_pop_test ) break;\n";
+		if ( !last ) {
+			ret <<
+				"if ( !" << pop_test << " )\n"
+				"	break;\n";
+		}
 	}
 	else {
-		ret << "_pop_test = ";
+		ret << pop_test << " = ";
 		CONDITION( ret, condition );
 		ret << ";\n";
-		if ( !last )
-			ret << "if ( !_pop_test ) break;\n";
+
+		if ( !last ) {
+			ret <<
+				"if ( !" << pop_test << " )\n"
+				"	break;\n";
+		}
 	}
+}
+
+void CodeGen::NFA_POP_TEST_EXEC()
+{
+	out << 
+		"		" << pop_test << " = 1;\n"
+		"		switch ( nfa_bp[nfa_len].popTrans ) {\n";
+
+	/* Loop the actions. */
+	for ( GenActionTableMap::Iter redAct = redFsm->actionMap;
+			redAct.lte(); redAct++ )
+	{
+		if ( redAct->numNfaPopTestRefs > 0 ) {
+			/* Write the entry label. */
+			out << "\t " << CASE( STR( redAct->actListId+1 ) ) << " {\n";
+
+			/* Write each action in the list of action items. */
+			for ( GenActionTable::Iter item = redAct->key; item.lte(); item++ )
+				NFA_CONDITION( out, item->value, item.last() );
+
+			out << CEND() << "\n}\n";
+		}
+	}
+
+	out <<
+		"		}\n"
+		"\n";
 }
 
 
@@ -1055,5 +1119,83 @@ void CodeGen::writeExports()
 				DATA_PREFIX() + "ex_" + ex->name, KEY(ex->key) ) << "\n";
 		}
 		out << "\n";
+	}
+}
+
+void CodeGen::NFA_PUSH( std::string state )
+{
+	if ( redFsm->anyNfaStates() ) {
+		out <<
+			"	if ( " << ARR_REF( nfaOffsets ) << "[" << state << "] ) {\n"
+			"		" << alt << " = 0; \n"
+			"		" << new_recs << " = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
+						ARR_REF( nfaOffsets ) << "[" << state << "]];\n";
+
+		if ( red->nfaPrePushExpr != 0 ) {
+			out << OPEN_HOST_BLOCK( red->nfaPrePushExpr );
+			INLINE_LIST( out, red->nfaPrePushExpr->inlineList, 0, false, false );
+			out << CLOSE_HOST_BLOCK();
+			out << "\n";
+			genOutputLineDirective( out );
+		}
+
+		out <<
+			"		while ( " << alt << " < " << new_recs << " ) { \n";
+
+
+		out <<
+			"			nfa_bp[nfa_len].state = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
+							ARR_REF( nfaOffsets ) << "[" << state << "] + 1 + " << alt << "];\n"
+			"			nfa_bp[nfa_len].p = " << P() << ";\n";
+
+		if ( redFsm->bAnyNfaPops ) {
+			out <<
+				"			nfa_bp[nfa_len].popTrans = " << ARR_REF( nfaPopTrans ) << "[" << CAST("long") <<
+								ARR_REF( nfaOffsets ) << "[" << state << "] + 1 + " << alt << "];\n"
+				"\n"
+				;
+		}
+
+		if ( redFsm->bAnyNfaPushes ) {
+			out <<
+				"			switch ( " << ARR_REF( nfaPushActions ) << "[" << CAST("int") <<
+								ARR_REF( nfaOffsets ) << "[" << state << "] + 1 + " << alt << "] ) {\n";
+
+			/* Loop the actions. */
+			for ( GenActionTableMap::Iter redAct = redFsm->actionMap;
+					redAct.lte(); redAct++ )
+			{
+				if ( redAct->numNfaPushRefs > 0 ) {
+					/* Write the entry label. */
+					out << "\t " << CASE( STR( redAct->actListId+1 ) ) << " {\n";
+
+					/* Write each action in the list of action items. */
+					for ( GenActionTable::Iter item = redAct->key; item.lte(); item++ )
+						ACTION( out, item->value, IlOpts( 0, false, false ) );
+
+					out << "\n\t" << CEND() << "\n}\n";
+				}
+			}
+
+			out <<
+				"			}\n";
+		}
+
+
+		out <<
+			"			nfa_len += 1;\n"
+			"			" << alt << " += 1;\n"
+			"		}\n"
+			"	}\n"
+			;
+	}
+}
+
+void CodeGen::NFA_POST_POP()
+{
+	if ( red->nfaPostPopExpr != 0 ) {
+		out << OPEN_HOST_BLOCK( red->nfaPostPopExpr );
+		INLINE_LIST( out, red->nfaPostPopExpr->inlineList, 0, false, false );
+		out << CLOSE_HOST_BLOCK();
 	}
 }

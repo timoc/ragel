@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -83,9 +83,7 @@ void IpGoto::EOF_CHECK( ostream &ret, int gotoDest )
 {
 	ret << 
 		"       if ( " << P() << " == " << PE() << " )\n"
-		"               goto _test_eof" << gotoDest << ";\n";
-
-	testEofUsed = true;
+		"               goto " << eofLabel[gotoDest].reference() << ";\n";
 }
 
 void IpGoto::GOTO( ostream &ret, int gotoDest, bool inFinish )
@@ -95,7 +93,7 @@ void IpGoto::GOTO( ostream &ret, int gotoDest, bool inFinish )
 	if ( inFinish && !noEnd )
 		EOF_CHECK( ret, gotoDest );
 
-	ret << "goto st" << gotoDest << ";";
+	ret << "goto " << stLabel[gotoDest].reference() << ";";
 
 	ret << CLOSE_GEN_BLOCK();
 }
@@ -109,9 +107,9 @@ void IpGoto::GOTO_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish )
 	/* Since we are setting CS above and can select on it, call the all-state
 	 * test_eof. */
 	if ( inFinish && !noEnd )
-		CodeGen::EOF_CHECK( ret );
+		Goto::EOF_CHECK( ret );
 	
-	ret << " goto _again;";
+	ret << " goto " << _again << ";";
 	
 	ret << CLOSE_GEN_BLOCK();
 }
@@ -132,7 +130,7 @@ void IpGoto::CALL( ostream &ret, int callDest, int targState, bool inFinish )
 	if ( inFinish && !noEnd )
 		EOF_CHECK( ret, callDest );
 
-	ret << "goto st" << callDest << ";";
+	ret << "goto " << stLabel[callDest].reference() << ";";
 
 	ret << CLOSE_GEN_BLOCK();
 }
@@ -170,9 +168,9 @@ void IpGoto::CALL_EXPR( ostream &ret, GenInlineItem *ilItem, int targState, bool
 	/* Since we are setting CS above and can select on it, call the all-state
 	 * test_eof. */
 	if ( inFinish && !noEnd )
-		CodeGen::EOF_CHECK( ret );
+		Goto::EOF_CHECK( ret );
 
-	ret << " goto _again;";
+	ret << " goto " << _again << ";";
 	
 	ret << CLOSE_GEN_BLOCK();
 }
@@ -205,9 +203,9 @@ void IpGoto::RET( ostream &ret, bool inFinish )
 	}
 
 	if ( inFinish && !noEnd )
-		CodeGen::EOF_CHECK( ret );
+		Goto::EOF_CHECK( ret );
 
-	ret << "goto _again;" << CLOSE_GEN_BLOCK();
+	ret << "goto " << _again << ";" << CLOSE_GEN_BLOCK();
 }
 
 void IpGoto::NRET( ostream &ret, bool inFinish )
@@ -238,7 +236,7 @@ void IpGoto::NEXT_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish )
 
 void IpGoto::CURS( ostream &ret, bool inFinish )
 {
-	ret << "(_ps)";
+	ret << "(" << ps << ")";
 }
 
 void IpGoto::TARGS( ostream &ret, bool inFinish, int targState )
@@ -248,20 +246,18 @@ void IpGoto::TARGS( ostream &ret, bool inFinish, int targState )
 
 void IpGoto::BREAK( ostream &ret, int targState, bool csForced )
 {
-	outLabelUsed = true;
 	ret << "{" << P() << "+= 1; ";
 	if ( !csForced ) 
 		ret << vCS() << " = " << targState << "; ";
-	ret << "goto _out;}";
+	ret << "goto " << _out << ";}";
 }
 
 void IpGoto::NBREAK( ostream &ret, int targState, bool csForced )
 {
-	outLabelUsed = true;
 	ret << "{" << P() << "+= 1; ";
 	if ( !csForced ) 
 		ret << vCS() << " = " << targState << "; ";
-	ret << "_nbreak = 1;}";
+	ret << nbreak << " = 1;}";
 }
 
 void IpGoto::NFA_PUSH_ACTION( RedNfaTarg *targ )
@@ -294,7 +290,8 @@ bool IpGoto::IN_TRANS_ACTIONS( RedStateAp *state )
 			anyWritten = true;
 
 			/* Write the label for the transition so it can be jumped to. */
-			out << "ctr" << trans->id << ":\n";
+			if ( ctrLabel[trans->id].isReferenced )
+				out << "_ctr" << trans->id << ":\n";
 
 			/* If the action contains a next, then we must preload the current
 			 * state since the action may or may not set it. */
@@ -302,7 +299,7 @@ bool IpGoto::IN_TRANS_ACTIONS( RedStateAp *state )
 				out << "	" << vCS() << " = " << trans->targ->id << ";\n";
 
 			if ( redFsm->anyRegNbreak() )
-				out << "_nbreak = 0;\n";
+				out << nbreak << " = 0;\n";
 
 			/* Write each action in the list. */
 			for ( GenActionTable::Iter item = trans->action->key; item.lte(); item++ ) {
@@ -313,18 +310,17 @@ bool IpGoto::IN_TRANS_ACTIONS( RedStateAp *state )
 
 			if ( redFsm->anyRegNbreak() ) {
 				out <<
-					"if ( _nbreak == 1 )\n"
-					"	goto _out;\n";
-				outLabelUsed = true;
+					"if ( " << nbreak << " == 1 )\n"
+					"	goto " << _out << ";\n";
 			}
 				
  
 			/* If the action contains a next then we need to reload, otherwise
 			 * jump directly to the target state. */
 			if ( trans->action->anyNextStmt() )
-				out << "\n\tgoto _again;\n";
+				out << "goto " << _again << ";\n";
 			else
-				out << "\n\tgoto st" << trans->targ->id << ";\n";
+				out << "goto " << stLabel[trans->targ->id].reference() << ";\n";
 		}
 	}
 
@@ -338,8 +334,20 @@ void IpGoto::GOTO_HEADER( RedStateAp *state )
 {
 	IN_TRANS_ACTIONS( state );
 
-	if ( state->labelNeeded ) 
-		out << "st" << state->id << ":\n";
+	if ( stLabel[state->id].isReferenced ) 
+		out << "_st" << state->id << ":\n";
+
+	/* need to do this if the transition is an eof transition, or if the action
+	 * contains fexec. Otherwise, no need. */
+	if ( redFsm->anyEofActivity() ) {
+		out <<
+			"if ( " << P() << " == " << vEOF() << " ) {\n"
+			"	if ( " << vCS() << " >= " << FIRST_FINAL_STATE() << " )\n"
+			"		goto " << _out << ";\n"
+			"	else\n"
+			"		goto " << _pop << ";\n"
+			"}\n";
+	}
 
 	if ( state->toStateAction != 0 ) {
 		/* Write every action in the list. */
@@ -354,13 +362,13 @@ void IpGoto::GOTO_HEADER( RedStateAp *state )
 	if ( state->labelNeeded ) {
 		if ( !noEnd ) {
 			out <<
-				"	" << P() << "+= 1;\n"
-				"	if ( " << P() << " == " << PE() << " )\n"
-				"		goto _test_eof" << state->id << ";\n";
+				P() << "+= 1;\n"
+				"if ( " << P() << " == " << PE() << " )\n"
+				"	goto " << eofLabel[state->id].reference() << ";\n";
 		}
 		else {
 			out << 
-				"	" << P() << " += 1;\n";
+				P() << " += 1;\n";
 		}
 	}
 
@@ -378,7 +386,7 @@ void IpGoto::GOTO_HEADER( RedStateAp *state )
 
 	/* Record the prev state if necessary. */
 	if ( state->anyRegCurStateRef() )
-		out << "	_ps = " << state->id << ";\n";
+		out << ps << " = " << state->id << ";\n";
 }
 
 void IpGoto::STATE_GOTO_ERROR()
@@ -389,18 +397,17 @@ void IpGoto::STATE_GOTO_ERROR()
 	IN_TRANS_ACTIONS( state );
 
 	out << "st_case_" << state->id << ":\n";
-	if ( state->labelNeeded ) 
-		out << "st" << state->id << ":\n";
+	if ( stLabel[state->id].isReferenced ) 
+		out << "_st" << state->id << ":\n";
 
 	/* Break out here. */
-	outLabelUsed = true;
 	out << vCS() << " = " << state->id << ";\n";
-	out << "	goto _out;\n";
+	out << "goto " << _pop << ";\n";
 }
 
 
 /* Emit the goto to take for a given transition. */
-std::ostream &IpGoto::TRANS_GOTO( RedTransAp *trans, int level )
+std::ostream &IpGoto::TRANS_GOTO( RedTransAp *trans )
 {
 	if ( trans->condSpace == 0 || trans->condSpace->condSet.length() == 0 ) {
 		/* Existing. */
@@ -408,27 +415,27 @@ std::ostream &IpGoto::TRANS_GOTO( RedTransAp *trans, int level )
 		RedCondPair *cond = trans->outCond( 0 );
 		if ( cond->action != 0 ) {
 			/* Go to the transition which will go to the state. */
-			out << TABS(level) << "goto ctr" << cond->id << ";";
+			out << "goto " << ctrLabel[trans->p.id].reference() << ";";
 		}
 		else {
 			/* Go directly to the target state. */
-			out << TABS(level) << "goto st" << cond->targ->id << ";";
+			out << "goto " << stLabel[cond->targ->id].reference() << ";";
 		}
 	}
 	else {
-		out << TABS(level) << "int ck = 0;\n";
+		out << ck << " = 0;\n";
 		for ( GenCondSet::Iter csi = trans->condSpace->condSet; csi.lte(); csi++ ) {
-			out << TABS(level) << "if ( ";
+			out << "if ( ";
 			CONDITION( out, *csi );
 			Size condValOffset = (1 << csi.pos());
-			out << " ) ck += " << condValOffset << ";\n";
+			out << " )\n" << ck << " += " << condValOffset << ";\n";
 		}
 		CondKey lower = 0;
 		CondKey upper = trans->condFullSize() - 1;
-		COND_B_SEARCH( trans, 1, lower, upper, 0, trans->numConds() - 1 );
+		COND_B_SEARCH( trans, lower, upper, 0, trans->numConds() - 1 );
 
 		if ( trans->errCond() != 0 ) {
-			COND_GOTO( trans->errCond(), level+1 ) << "\n";
+			COND_GOTO( trans->errCond() ) << "\n";
 		}
 	}
 
@@ -436,16 +443,16 @@ std::ostream &IpGoto::TRANS_GOTO( RedTransAp *trans, int level )
 }
 
 /* Emit the goto to take for a given transition. */
-std::ostream &IpGoto::COND_GOTO( RedCondPair *cond, int level )
+std::ostream &IpGoto::COND_GOTO( RedCondPair *cond )
 {
 	/* Existing. */
 	if ( cond->action != 0 ) {
 		/* Go to the transition which will go to the state. */
-		out << TABS(level) << "goto ctr" << cond->id << ";";
+		out << "goto " << ctrLabel[cond->id].reference() << ";";
 	}
 	else {
 		/* Go directly to the target state. */
-		out << TABS(level) << "goto st" << cond->targ->id << ";";
+		out << "goto " << stLabel[cond->targ->id].reference() << ";";
 	}
 
 	return out;
@@ -454,10 +461,9 @@ std::ostream &IpGoto::COND_GOTO( RedCondPair *cond, int level )
 std::ostream &IpGoto::EXIT_STATES()
 {
 	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
-		if ( st->outNeeded ) {
-			testEofUsed = true;
-			out << "	_test_eof" << st->id << ": " << vCS() << " = " << 
-					st->id << "; goto _test_eof; \n";
+		if ( eofLabel[st->id].isReferenced ) {
+			out << eofLabel[st->id].define() << ": " << vCS() << " = " << 
+					st->id << "; goto " << _test_eof << "; \n";
 		}
 	}
 	return out;
@@ -467,7 +473,7 @@ std::ostream &IpGoto::AGAIN_CASES()
 {
 	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
 		out << 
-			"		case " << st->id << ": goto st" << st->id << ";\n";
+			"case " << st->id << ": goto " << stLabel[st->id].reference() << ";\n";
 	}
 	return out;
 }
@@ -475,76 +481,60 @@ std::ostream &IpGoto::AGAIN_CASES()
 std::ostream &IpGoto::STATE_GOTO_CASES()
 {
 	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
-		out << TABS(1) << "case " << st->id << ":\n";
-		out << TABS(2) << "goto st_case_" << st->id << ";\n";
+		out << "case " << st->id << ":\n";
+		out << "goto st_case_" << st->id << ";\n";
 	}
 	return out;
 }
 
 void IpGoto::NFA_PUSH( RedStateAp *state )
 {
+	std::stringstream ss;
+	ss << state->id;
+	std::string _state = ss.str();
+
 	if ( redFsm->anyNfaStates() ) {
-		out <<
-			"	if ( " << ARR_REF( nfaOffsets ) << "[" << state->id << "] ) {\n"
-			"		int alt = 0; \n"
-			"		int new_recs = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
-						ARR_REF( nfaOffsets ) << "[" << state->id << "]];\n";
 
-		if ( red->nfaPrePushExpr != 0 ) {
-			out << OPEN_HOST_BLOCK( red->nfaPrePushExpr );
-			INLINE_LIST( out, red->nfaPrePushExpr->inlineList, 0, false, false );
-			out << CLOSE_HOST_BLOCK();
-		}
-
-		out <<
-			"		while ( alt < new_recs ) { \n";
-
-
-		out <<
-			"			nfa_bp[nfa_len].state = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
-							ARR_REF( nfaOffsets ) << "[" << state->id << "] + 1 + alt];\n"
-			"			nfa_bp[nfa_len].p = " << P() << ";\n";
-
-		if ( redFsm->bAnyNfaPops ) {
+		if ( state->nfaTargs != 0 ) {
 			out <<
-				"			nfa_bp[nfa_len].popTrans = " << CAST("long") <<
-								ARR_REF( nfaOffsets ) << "[" << state->id << "] + 1 + alt;\n"
-				"\n"
-				;
-		}
+				"if ( " << ARR_REF( nfaOffsets ) << "[" << _state << "] ) {\n"
+				"	" << new_recs << " = " << state->nfaTargs->length() << ";\n";
 
-		if ( redFsm->bAnyNfaPushes ) {
-			out <<
-				"			switch ( " << ARR_REF( nfaPushActions ) << "[" << CAST("int") <<
-								ARR_REF( nfaOffsets ) << "[" << state->id << "] + 1 + alt] ) {\n";
+			if ( red->nfaPrePushExpr != 0 ) {
+				out << OPEN_HOST_BLOCK( red->nfaPrePushExpr );
+				INLINE_LIST( out, red->nfaPrePushExpr->inlineList, 0, false, false );
+				out << CLOSE_HOST_BLOCK();
+			}
 
-			/* Loop the actions. */
-			for ( GenActionTableMap::Iter redAct = redFsm->actionMap;
-					redAct.lte(); redAct++ )
-			{
-				if ( redAct->numNfaPushRefs > 0 ) {
-					/* Write the entry label. */
-					out << "\t " << CASE( STR( redAct->actListId+1 ) ) << " {\n";
+			int alt = 0;
+			for ( RedNfaTargs::Iter nt = *state->nfaTargs; nt.lte(); nt++ ) {
+				out <<
+					"	nfa_bp[nfa_len].state = " << nt->state->id << ";\n"
+					"	nfa_bp[nfa_len].p = " << P() << ";\n";
 
-					/* Write each action in the list of action items. */
-					for ( GenActionTable::Iter item = redAct->key; item.lte(); item++ )
-						ACTION( out, item->value, IlOpts( 0, false, false ) );
-
-					out << "\n\t" << CEND() << "}\n";
+				if ( nt->popTest != 0 ) {
+					out <<
+						"	nfa_bp[nfa_len].popTrans = " << (nt->popTest->actListId+1) << ";\n";
 				}
+				else if ( redFsm->bAnyNfaPops ) {
+					out <<
+						"	nfa_bp[nfa_len].popTrans = 0;\n";
+				}
+
+				if ( nt->push != 0 )  {
+					for ( GenActionTable::Iter item = nt->push->key; item.lte(); item++ )
+						ACTION( out, item->value, IlOpts( 0, false, false ) );
+				}
+
+				out <<
+					"	nfa_len += 1;\n";
+
+				alt += 1;
 			}
 
 			out <<
-				"			}\n";
+				"}\n";
 		}
-
-
-		out <<
-			"			nfa_len += 1;\n"
-			"			alt += 1;\n"
-			"		}\n"
-			"	}\n"
-			;
 	}
 }
 
@@ -565,49 +555,27 @@ std::ostream &IpGoto::STATE_GOTOS()
 
 			/* Default case is to binary search for the ranges, if that fails then */
 			if ( st->outRange.length() > 0 ) {
-				RANGE_B_SEARCH( st, 1, keyOps->minKey, keyOps->maxKey,
+				RANGE_B_SEARCH( st, keyOps->minKey, keyOps->maxKey,
 						0, st->outRange.length() - 1 );
 			}
 
 			/* Write the default transition. */
 			out << "{\n";
-			TRANS_GOTO( st->defTrans, 1 ) << "\n";
+			TRANS_GOTO( st->defTrans ) << "\n";
 			out << "}\n";
 		}
 	}
 	return out;
 }
 
-
 std::ostream &IpGoto::FINISH_CASES()
 {
 	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
-		if ( st->eofAction != 0 ) {
-			if ( st->eofAction->eofRefs == 0 )
-				st->eofAction->eofRefs = new IntSet;
-			st->eofAction->eofRefs->insert( st->id );
-		}
-	}
-
-	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
 		if ( st->eofTrans != 0 ) {
-			RedCondPair *cond = st->eofTrans->outCond( 0 );
-			out << "	case " << st->id << ": goto ctr" << cond->id << ";\n";
-		}
-	}
+			out <<
+				"case " << st->id << ":\n";
 
-	for ( GenActionTableMap::Iter act = redFsm->actionMap; act.lte(); act++ ) {
-		if ( act->eofRefs != 0 ) {
-			for ( IntSet::Iter pst = *act->eofRefs; pst.lte(); pst++ ) {
-				out << "	case " << *pst << ": \n";
-				if ( ! pst.last() )
-					out << "		" << FALLTHROUGH() << "\n";
-			}
-
-			/* Write each action in the eof action list. */
-			for ( GenActionTable::Iter item = act->key; item.lte(); item++ )
-				ACTION( out, item->value, IlOpts( STATE_ERR_STATE, true, false ) );
-			out << "\n\tbreak;\n";
+			TRANS_GOTO( st->eofTrans );
 		}
 	}
 
@@ -618,13 +586,14 @@ void IpGoto::setLabelsNeeded( GenInlineList *inlineList )
 {
 	for ( GenInlineList::Iter item = *inlineList; item.lte(); item++ ) {
 		switch ( item->type ) {
-		case GenInlineItem::Goto: case GenInlineItem::Call:
-		case GenInlineItem::Ncall: {
-			/* Mark the target as needing a label. */
-			item->targState->labelNeeded = true;
-			break;
-		}
-		default: break;
+			case GenInlineItem::Goto:
+			case GenInlineItem::Call:
+			case GenInlineItem::Ncall: {
+				/* Mark the target as needing a label. */
+				item->targState->labelNeeded = true;
+				break;
+			}
+			default: break;
 		}
 
 		if ( item->children != 0 )
@@ -679,14 +648,6 @@ void IpGoto::setLabelsNeeded()
 			}
 		}
 	}
-
-	if ( !noEnd ) {
-		for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
-			if ( st != redFsm->errState )
-				st->outNeeded = st->labelNeeded;
-		}
-
-	}
 }
 
 void IpGoto::writeData()
@@ -701,43 +662,50 @@ void IpGoto::writeData()
 
 void IpGoto::NFA_FROM_STATE_ACTION_EXEC()
 {
-	if ( redFsm->anyFromStateActions() ) {
-		/* Unimplemented feature. Don't have the from state actions array in
-		 * this mode. Need to add it, or to alter the NFA pop codegen to be
-		 * consistent with the mode. */ 
-		assert( false );
-	}
+//	if ( redFsm->anyFromStateActions() ) {
+//		/* Unimplemented feature. Don't have the from state actions array in
+//		 * this mode. Need to add it, or to alter the NFA pop codegen to be
+//		 * consistent with the mode. */ 
+//		assert( false );
+//	}
 }
-
 
 void IpGoto::writeExec()
 {
+	int maxCtrId = redFsm->nextCondId > redFsm->nextTransId ? redFsm->nextCondId : redFsm->nextTransId;
+
+	stLabel = allocateLabels( stLabel, IpLabel::St, redFsm->nextStateId );
+	eofLabel = allocateLabels( eofLabel, IpLabel::TestEof, redFsm->nextStateId );
+	ctrLabel = allocateLabels( ctrLabel, IpLabel::Ctr, maxCtrId );
+
 	/* Must set labels immediately before writing because we may depend on the
 	 * noend write option. */
 	setLabelsNeeded();
-	testEofUsed = false;
-	outLabelUsed = false;
 
-	out << "	{\n";
+	out << "{\n";
 
-	if ( redFsm->anyRegNbreak() )
-		out << "	int _nbreak;\n";
-
-	if ( redFsm->anyRegCurStateRef() )
-		out << "	int _ps = 0;\n";
+	DECLARE( INT(), cpc );
+	DECLARE( INT(), ck );
+	DECLARE( INT(), pop_test );
+	DECLARE( INT(), nbreak );
+	DECLARE( INT(), ps );
+	DECLARE( INT(), new_recs );
+	DECLARE( INT(), alt );
 
 	if ( !noEnd ) {
-		testEofUsed = true;
 		out << 
 			"	if ( " << P() << " == " << PE() << " )\n"
-			"		goto _test_eof;\n";
+			"		goto " << _test_eof << ";\n";
 	}
 
-	if ( useAgainLabel() ) {
+	if ( _again.isReferenced ) {
 		out << 
-			"	goto _resume;\n"
-			"\n"
-			"_again:\n"
+			"	goto " << _resume << ";\n"
+			"\n";
+
+		out << EMIT_LABEL( _again );
+
+		out <<
 			"	switch ( " << vCS() << " ) {\n";
 			AGAIN_CASES() <<
 			"	}\n"
@@ -745,12 +713,10 @@ void IpGoto::writeExec()
 
 	}
 
-	if ( useAgainLabel() || redFsm->anyNfaStates() ) 
-		out << "_resume:\n";
+	out << EMIT_LABEL( _resume );
 
 	out <<
-		"	switch ( " << vCS() << " )\n"
-		"	{\n";
+		"	switch ( " << vCS() << " ) {\n";
 		STATE_GOTO_CASES() <<
 		"	}\n"
 		"	goto st_out;\n";
@@ -759,25 +725,116 @@ void IpGoto::writeExec()
 		EXIT_STATES() <<
 		"\n";
 
-	if ( testEofUsed ) 
-		out << "	_test_eof: {}\n";
+	out << EMIT_LABEL( _test_eof );
 
-	if ( redFsm->anyEofTrans() || redFsm->anyEofActions() ) {
+	if ( redFsm->anyEofActivity() ) {
 		out <<
-			"	if ( " << P() << " == " << vEOF() << " )\n"
-			"	{\n"
+			"	if ( " << P() << " == " << vEOF() << " ) {\n";
+
+		out <<
+			"		switch ( " << vCS() << " ) {\n";
+
+		for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+			out << "case " << st->id << ": {\n";
+			NFA_PUSH( st );
+			FROM_STATE_ACTION_EMIT( st );
+
+			out << "break;\n}\n";
+		}
+
+		out <<
+			"		}\n";
+
+		out <<
+			"		switch ( " << vCS() << " ) {\n";
+
+		bool okeydokey = false;
+		for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+			if ( st->outCondSpace != 0 ) {
+				out << "case " << st->id << ": {\n";
+
+				out << ck << " = 0;\n";
+				for ( GenCondSet::Iter csi = st->outCondSpace->condSet; csi.lte(); csi++ ) {
+					out << "if ( ";
+					CONDITION( out, *csi );
+					Size condValOffset = (1 << csi.pos());
+					out << " )\n" << ck << " += " << condValOffset << ";\n";
+				}
+
+				out << "switch ( " << ck << " ) {\n";
+				for ( CondKeySet::Iter k = st->outCondKeys; k.lte(); k++ ) {
+					out << "case " << *k << ": goto _okeydokey;\n";
+					okeydokey = true;
+				}
+				out << "}\n";
+
+				out << vCS() << " = " << ERROR_STATE() << ";\n";
+				out << "goto " << _pop << ";\n";
+
+				out << "}\n";
+			}
+		}
+
+		out <<
+			"	}\n";
+
+		if ( okeydokey ) {
+			out <<
+				"_okeydokey: {}\n";
+		}
+
+		out <<
 			"	switch ( " << vCS() << " ) {\n";
 			FINISH_CASES() <<
-			"	}\n"
+			"	}\n";
+
+
+		out <<
 			"	}\n"
 			"\n";
 	}
 
-	if ( outLabelUsed ) 
-		out << "	_out: {}\n";
+	out <<
+		"if ( " << vCS() << " >= " << FIRST_FINAL_STATE() << " )\n"
+		"	goto " << _out << "; ";
 
-	NFA_POP();
+	out << EMIT_LABEL( _pop );
+
+	if ( redFsm->anyNfaStates() ) {
+		out <<
+			"if ( nfa_len == 0 )\n"
+			"	goto " << _out << ";\n"
+			"\n";
+
+		out <<
+			"nfa_count += 1;\n"
+			"nfa_len -= 1;\n" <<
+			P() << " = nfa_bp[nfa_len].p;\n";
+
+		if ( redFsm->bAnyNfaPops ) {
+			NFA_FROM_STATE_ACTION_EXEC();
+
+			NFA_POP_TEST_EXEC();
+
+			out <<
+				"if ( " << pop_test << " )\n"
+				"	" << vCS() << " = nfa_bp[nfa_len].state;\n"
+				"else\n"
+				"	" << vCS() << " = " << ERROR_STATE() << ";\n";
+		}
+		else {
+			out <<
+				vCS() << " = nfa_bp[nfa_len].state;\n";
+
+		}
+
+		NFA_POST_POP();
+
+		out << "goto " << _resume << ";\n";
+	}
+
+	out << EMIT_LABEL( _out );
 
 	out <<
-		"	}\n";
+		"}\n";
 }

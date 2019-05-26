@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2008 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -196,6 +196,7 @@ typedef DList<LengthDef> LengthDefList;
 extern const int ORD_PUSH;
 extern const int ORD_RESTORE;
 extern const int ORD_COND;
+extern const int ORD_COND2;
 extern const int ORD_TEST;
 
 /* Class to collect information about the machine during the 
@@ -340,7 +341,7 @@ struct ParseData
 
 	void setLmInRetLoc( InlineList *inlineList );
 	void initLongestMatchData();
-	void setLongestMatchData( FsmAp *graph );
+	void longestMatchInitTweaks( FsmAp *graph );
 	void initNameWalk();
 	void initExportsNameWalk();
 	NameInst *nextNameScope() { return curNameInst->childVect[curNameChild]; }

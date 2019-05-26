@@ -1,5 +1,5 @@
 /*
- * Copyright 2001, 2002, 2006, 2011 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -354,14 +354,8 @@ void FsmAp::transferOutData( StateAp *destState, StateAp *srcState )
 	}
 
 	if ( destState->nfaOut != 0 ) {
-		for ( NfaTransList::Iter na = *destState->nfaOut; na.lte(); na++ ) {
-			na->popAction.setActions( srcState->outActionTable );
-
-			na->popCondSpace = srcState->outCondSpace;
-			na->popCondKeys = srcState->outCondKeys;
-
-			na->priorTable.setPriors( srcState->outPriorTable );
-		}
+		for ( NfaTransList::Iter na = *destState->nfaOut; na.lte(); na++ )
+			transferOutToNfaTrans( na, srcState );
 	}
 }
 
@@ -513,6 +507,35 @@ void FsmAp::resolveEpsilonTrans()
 		/* Clear the epsilon transitions vector. */
 		st->epsilonTrans.empty();
 	}
+}
+
+FsmRes FsmAp::applyNfaTrans( FsmAp *fsm, StateAp *fromState, StateAp *toState, NfaTrans *nfaTrans )
+{
+	fsm->setMisfitAccounting( true );
+
+	fsm->mergeStates( fromState, toState, false );
+
+	/* Epsilons can caused merges which leave behind unreachable states. */
+	FsmRes res = FsmAp::fillInStates( fsm );
+	if ( !res.success() )
+		return res;
+
+	/* Can nuke the epsilon transition that we will never
+	 * follow. */
+	fsm->detachFromNfa( fromState, toState, nfaTrans );
+	fromState->nfaOut->detach( nfaTrans );
+	delete nfaTrans;
+
+	if ( fromState->nfaOut->length() == 0 ) {
+		delete fromState->nfaOut;
+		fromState->nfaOut = 0;
+	}
+
+	/* Remove the misfits and turn off misfit accounting. */
+	fsm->removeMisfits();
+	fsm->setMisfitAccounting( false );
+
+	return FsmRes( FsmRes::Fsm(), fsm );
 }
 
 void FsmAp::globOp( FsmAp **others, int numOthers )
@@ -1363,6 +1386,7 @@ void FsmAp::mergeStateProperties( StateAp *destState, StateAp *srcState )
 		destState->outActionTable.setActions( srcState->outActionTable );
 		destState->errActionTable.setActions( srcState->errActionTable );
 		destState->eofActionTable.setActions( srcState->eofActionTable );
+		destState->lmNfaParts.insert( srcState->lmNfaParts );
 		destState->guardedInTable.setPriors( srcState->guardedInTable );
 	}
 }
@@ -1386,7 +1410,7 @@ void FsmAp::mergeNfaTransitions( StateAp *destState, StateAp *srcState )
 		for ( NfaTransList::Iter nt = *srcState->nfaOut; nt.lte(); nt++ ) {
 			NfaTrans *trans = new NfaTrans(
 					nt->pushTable, nt->restoreTable,
-					nt->popCondSpace, nt->popCondKeys,
+					nt->popFrom, nt->popCondSpace, nt->popCondKeys,
 					nt->popAction, nt->popTest, nt->order );
 
 			destState->nfaOut->append( trans );

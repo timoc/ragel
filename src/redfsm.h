@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2006 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -67,7 +67,7 @@ struct GenInlineItem
 		NcallExpr, NextExpr, Ret, Nret,
 		PChar, Char, Hold, Curs, Targs, Entry, Exec, Break, Nbreak,
 		LmSwitch, LmExec, LmSetActId, LmSetTokEnd, LmGetTokEnd,
-		LmInitAct, LmInitTokStart, LmSetTokStart,
+		LmInitAct, LmInitTokStart, LmSetTokStart, NfaClear,
 		HostStmt, HostExpr, HostText,
 		GenStmt, GenExpr, LmCase, LmHold,
 		NfaWrapAction, NfaWrapConds
@@ -598,7 +598,8 @@ struct RedStateAp
 		numInConds(0),
 		inCondTests(0),
 		numInCondTests(0),
-		nfaTargs(0)
+		nfaTargs(0),
+		outCondSpace(0)
 	{ }
 
 	/* Transitions out. */
@@ -641,6 +642,8 @@ struct RedStateAp
 	int numInCondTests;
 
 	RedNfaTargs *nfaTargs;
+	GenCondSpace *outCondSpace;
+	RedCondKeySet outCondKeys;
 };
 
 /* List of states. */
@@ -688,6 +691,7 @@ struct RedFsmAp
 	bool bAnyRegActions;
 	bool bAnyEofActions;
 	bool bAnyEofTrans;
+	bool bAnyEofActivity;
 	bool bAnyActionGotos;
 	bool bAnyActionCalls;
 	bool bAnyActionNcalls;
@@ -729,6 +733,7 @@ struct RedFsmAp
 	bool anyRegActions()            { return bAnyRegActions; }
 	bool anyEofActions()            { return bAnyEofActions; }
 	bool anyEofTrans()              { return bAnyEofTrans; }
+	bool anyEofActivity()			{ return bAnyEofActivity; }
 	bool anyActionGotos()           { return bAnyActionGotos; }
 	bool anyActionCalls()           { return bAnyActionCalls; }
 	bool anyActionNcalls()          { return bAnyActionNcalls; }

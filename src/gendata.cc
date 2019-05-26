@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2007 Adrian Thurston <thurston@colm.net>
+ * Copyright 2005-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -293,6 +293,44 @@ void Reducer::makeLmSwitch( GenInlineList *outList, InlineItem *item )
 	outList->append( lmSwitch );
 }
 
+void Reducer::makeLmNfaOnNext( GenInlineList *outList, InlineItem *item )
+{
+	makeSetTokend( outList, 0 );
+	outList->append( new GenInlineItem( InputLoc(), GenInlineItem::LmHold ) );
+	outList->append( new GenInlineItem( InputLoc(), GenInlineItem::NfaClear ) );
+
+	if ( item->longestMatchPart->action != 0 ) {
+		Action *action = item->longestMatchPart->action;
+		makeSubList( outList, action->loc, action->inlineList,
+			GenInlineItem::HostStmt );
+	}
+}
+
+void Reducer::makeLmNfaOnEof( GenInlineList *outList, InlineItem *item )
+{
+	makeSetTokend( outList, 0 );
+	outList->append( new GenInlineItem( InputLoc(), GenInlineItem::NfaClear ) );
+
+	if ( item->longestMatchPart->action != 0 ) {
+		Action *action = item->longestMatchPart->action;
+		makeSubList( outList, action->loc, action->inlineList,
+			GenInlineItem::HostStmt );
+	}
+}
+
+void Reducer::makeLmNfaOnLast( GenInlineList *outList, InlineItem *item )
+{
+	makeSetTokend( outList, 1 );
+	outList->append( new GenInlineItem( InputLoc(), GenInlineItem::NfaClear ) );
+
+	if ( item->longestMatchPart->action != 0 ) {
+		Action *action = item->longestMatchPart->action;
+		makeSubList( outList, action->loc, action->inlineList, 
+				GenInlineItem::HostStmt );
+	}
+}
+
+
 void Reducer::makeSetTokend( GenInlineList *outList, long offset )
 {
 	GenInlineItem *inlineItem = new GenInlineItem( InputLoc(), GenInlineItem::LmSetTokEnd );
@@ -391,6 +429,16 @@ void Reducer::makeGenInlineList( GenInlineList *outList, InlineList *inList )
 			break;
 		case InlineItem::LmSwitch: 
 			makeLmSwitch( outList, item );
+			break;
+
+		case InlineItem::LmNfaOnLast:
+			makeLmNfaOnLast( outList, item );
+			break;
+		case InlineItem::LmNfaOnNext:
+			makeLmNfaOnNext( outList, item );
+			break;
+		case InlineItem::LmNfaOnEof:
+			makeLmNfaOnEof( outList, item );
 			break;
 
 		case InlineItem::LmInitAct:
@@ -584,13 +632,7 @@ void Reducer::makeStateActions( StateAp *state )
 	if ( state->fromStateActionTable.length() > 0 )
 		fromStateActions = actionTableMap.find( state->fromStateActionTable );
 
-	/* EOF actions go out here only if the state has no eof target. If it has
-	 * an eof target then an eof transition will be used instead. */
-	RedActionTable *eofActions = 0;
-	if ( state->eofTarget == 0 && state->eofActionTable.length() > 0 )
-		eofActions = actionTableMap.find( state->eofActionTable );
-	
-	if ( toStateActions != 0 || fromStateActions != 0 || eofActions != 0 ) {
+	if ( toStateActions != 0 || fromStateActions != 0 ) {
 		long to = -1;
 		if ( toStateActions != 0 )
 			to = toStateActions->id;
@@ -599,29 +641,7 @@ void Reducer::makeStateActions( StateAp *state )
 		if ( fromStateActions != 0 )
 			from = fromStateActions->id;
 
-		long eof = -1;
-		if ( eofActions != 0 )
-			eof = eofActions->id;
-
-		setStateActions( curState, to, from, eof );
-	}
-}
-
-void Reducer::makeEofTrans( StateAp *state )
-{
-	RedActionTable *eofActions = 0;
-	if ( state->eofActionTable.length() > 0 )
-		eofActions = actionTableMap.find( state->eofActionTable );
-	
-	/* The EOF trans is used when there is an eof target, otherwise the eof
-	 * action goes into state actions. */
-	if ( state->eofTarget != 0 ) {
-		long targ = state->eofTarget->alg.stateNum;
-		long action = -1;
-		if ( eofActions != 0 )
-			action = eofActions->id;
-
-		setEofTrans( curState, targ, action );
+		setStateActions( curState, to, from, -1 );
 	}
 }
 
@@ -695,6 +715,59 @@ void Reducer::makeTrans( Key lowKey, Key highKey, TransAp *trans )
 		newTrans( allStates + curState, lowKey, highKey, trans );
 	}
 }
+
+void Reducer::makeEofTrans( StateAp *state )
+{
+	/* EOF actions go out here only if the state has no eof target. If it has
+	 * an eof target then an eof transition will be used instead. */
+	RedActionTable *eofActions = 0;
+	if ( state->eofActionTable.length() > 0 )
+		eofActions = actionTableMap.find( state->eofActionTable );
+
+	/* Add an EOF transition if we have conditions, a target, or actions, */
+	if ( state->outCondSpace != 0 || state->eofTarget != 0 || eofActions != 0 )
+		redFsm->bAnyEofActivity = true;
+
+	long targ = state->alg.stateNum;
+	long action = -1;
+
+	if ( state->eofTarget != 0 )
+		targ = state->eofTarget->alg.stateNum;
+
+	if ( eofActions != 0 )
+		action = eofActions->id;
+
+
+	if ( state->outCondSpace == 0 ) {
+		// std::cerr << "setEofTrans( " <<
+		//		state->alg.stateNum << ", " << targ << ", " << action << " );" << endl;
+
+		setEofTrans( state->alg.stateNum, targ, action );
+	}
+	else {
+		int numConds = state->outCondKeys.length();
+		RedCondEl *outConds = new RedCondEl[numConds];
+		for ( int pos = 0; pos < numConds; pos++ ) {
+			/* Make the new transitions. */
+			RedStateAp *targState = targ >= 0 ? (allStates + targ) : redFsm->getErrorState();
+			RedAction *at = action >= 0 ? (allActionTables + action) : 0;
+			RedCondAp *cond = redFsm->allocateCond( targState, at );
+
+			outConds[pos].key = state->outCondKeys[pos];
+			outConds[pos].value = cond;
+		}
+
+		GenCondSpace *condSpace = allCondSpaces + state->outCondSpace->condSpaceId;
+
+		/* If the cond list is not full then we need an error cond. */
+		RedCondAp *errCond = 0;
+		if ( numConds < ( 1 << condSpace->condSet.length() ) )
+			errCond = redFsm->getErrorCond();
+		
+		setEofTrans( state->alg.stateNum, condSpace, outConds, numConds, errCond );
+	}
+}
+
 
 void Reducer::makeTransList( StateAp *state )
 {
@@ -1074,15 +1147,19 @@ void Reducer::setEofTrans( int snum, long eofTarget, long actId )
 {
 	RedStateAp *curState = allStates + snum;
 	RedStateAp *targState = allStates + eofTarget;
-	RedAction *eofAct = allActionTables + actId;
+	RedAction *eofAct = actId >= 0 ? allActionTables + actId : 0;
 
 	RedTransAp *trans = redFsm->allocateTrans( targState, eofAct );
+	curState->eofTrans = trans;
+}
 
-	trans->condSpace = 0;
-	trans->p.id = redFsm->nextCondId++;
-	trans->p.targ = targState;
-	trans->p.action = eofAct;
+void Reducer::setEofTrans( int snum, GenCondSpace *condSpace,
+		RedCondEl *outConds, int numConds, RedCondAp *errCond )
+{
+	RedStateAp *curState = allStates + snum;
 
+	RedTransAp *trans = redFsm->allocateTrans( condSpace, outConds, numConds, errCond );
+	
 	curState->eofTrans = trans;
 }
 
@@ -1525,6 +1602,14 @@ void Reducer::analyzeMachine()
 	setValueLimits();
 }
 
+void CodeGenData::genOutputLineDirective( std::ostream &out ) const
+{
+	std::streambuf *sbuf = out.rdbuf();
+	output_filter *filter = dynamic_cast<output_filter*>(sbuf);
+	if ( filter != 0 ) 
+		(*genLineDirective)( out, lineDirectives, filter->line + 1, filter->fileName );
+}
+
 void CodeGenData::write_option_error( InputLoc &loc, std::string arg )
 {
 	red->id->warning(loc) << "unrecognized write option \"" << arg << "\"" << std::endl;
@@ -1546,6 +1631,22 @@ void CodeGenData::writeClear()
 	cleared = true;
 }
 
+void CodeGenData::collectReferences()
+{
+	/* Do this once only. */
+	if ( !referencesCollected ) {
+		referencesCollected = true;
+
+		/* Nullify the output and execute the write. We use this pass to collect references. */
+		nullbuf nb;
+		std::streambuf *filt = out.rdbuf( &nb );
+		writeExec();
+
+		/* Restore the output for whatever writing comes next. */
+		out.rdbuf( filt );
+	}
+}
+
 void CodeGenData::writeStatement( InputLoc &loc, int nargs,
 		std::vector<std::string> &args, bool generateDot, const HostLang *hostLang )
 {
@@ -1556,6 +1657,8 @@ void CodeGenData::writeStatement( InputLoc &loc, int nargs,
 		red->id->error(loc) << "write statement following a clear is invalid" << std::endl;
 		return;
 	}
+
+	genOutputLineDirective( out );
 
 	if ( args[0] == "data" ) {
 		for ( int i = 1; i < nargs; i++ ) {
@@ -1574,6 +1677,7 @@ void CodeGenData::writeStatement( InputLoc &loc, int nargs,
 			red->id->stats() << "fsm-states\t" << redFsm->stateList.length() << std::endl;
 		}
 
+		collectReferences();
 		writeData();
 		statsSummary();
 	}
@@ -1593,6 +1697,7 @@ void CodeGenData::writeStatement( InputLoc &loc, int nargs,
 			else
 				write_option_error( loc, args[i] );
 		}
+		collectReferences();
 		writeExec();
 	}
 	else if ( args[0] == "exports" ) {

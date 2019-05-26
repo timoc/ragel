@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -33,6 +33,54 @@ struct RedTransAp;
 struct RedStateAp;
 struct GenStateCond;
 
+struct IpLabel
+{
+	IpLabel()
+	:
+		type(None),
+		stid(0),
+		isReferenced(false)
+	{}
+
+	enum Type
+	{
+		None = 1,
+		TestEof,
+		Ctr,
+		St
+	};
+
+	std::string reference()
+	{
+		isReferenced = true;
+		return define();
+	}
+
+	std::string define()
+	{
+		std::stringstream ss;
+		switch ( type ) {
+			case None: break;
+			case TestEof:
+				ss << "_test_eof" << stid;
+				break;
+			case Ctr:
+				ss << "_ctr" << stid;
+				break;
+			case St:
+				ss << "_st" << stid;
+				break;
+		}
+
+		return ss.str();
+	}
+
+	Type type;
+	int stid;
+	bool isReferenced;
+};
+
+
 /*
  * Goto driven fsm.
  */
@@ -40,22 +88,65 @@ class Goto
 	: public CodeGen
 {
 public:
-	Goto( const CodeGenArgs &args );
+	enum Type {
+		Loop = 1,
+		Exp,
+		Ip
+	};
+
+	Goto( const CodeGenArgs &args, Type type ) 
+	:
+		CodeGen( args ),
+		type(type),
+		acts( "_acts" ),
+		nacts( "_nacts" ),
+		ck( "_ck" ),
+		nbreak( "_nbreak" ),
+		ps( "_ps" ),
+		_out("_out"),
+		_pop("_pop"),
+		_again("_again"),
+		_resume("_resume"),
+		_test_eof("_test_eof"),
+		actions(           "actions",             *this ),
+		toStateActions(    "to_state_actions",    *this ),
+		fromStateActions(  "from_state_actions",  *this ),
+		eofActions(        "eof_actions",         *this ),
+		ctrLabel(0)
+	{}
+
+	void tableDataPass();
+	virtual void genAnalysis();
+	virtual void writeData();
+	virtual void writeExec();
 
 	std::ostream &TRANSITION( RedCondPair *pair );
 
-	std::ostream &STATE_GOTOS();
+	void FROM_STATE_ACTION_EMIT( RedStateAp *state );
+
+	std::ostream &STATE_CASES();
 	std::ostream &TRANSITIONS();
-	std::ostream &FINISH_CASES();
+
+	Type type;
+
+	Variable acts;
+	Variable nacts;
+	Variable ck;
+	Variable nbreak;
+	Variable ps;
+
+	GotoLabel _out;
+	GotoLabel _pop;
+	GotoLabel _again;
+	GotoLabel _resume;
+	GotoLabel _test_eof;
 
 	TableArray actions;
 	TableArray toStateActions;
 	TableArray fromStateActions;
 	TableArray eofActions;
-	TableArray nfaTargs;
-	TableArray nfaOffsets;
-	TableArray nfaPushActions;
-	TableArray nfaPopTrans;
+
+	IpLabel *ctrLabel;
 
 	void taActions();
 	void taToStateActions();
@@ -65,6 +156,8 @@ public:
 	void taNfaOffsets();
 	void taNfaPushActions();
 	void taNfaPopTrans();
+
+	void EOF_CHECK( ostream &ret );
 
 	void GOTO( ostream &ret, int gotoDest, bool inFinish );
 	void CALL( ostream &ret, int callDest, int targState, bool inFinish );
@@ -85,23 +178,24 @@ public:
 	virtual unsigned int FROM_STATE_ACTION( RedStateAp *state );
 	virtual unsigned int EOF_ACTION( RedStateAp *state );
 
-	std::ostream &ACTIONS_ARRAY();
+	virtual std::ostream &EXEC_FUNCS() = 0;
+	virtual std::ostream &TO_STATE_ACTION_SWITCH() = 0;
+	virtual std::ostream &FROM_STATE_ACTION_SWITCH() = 0;
+	virtual std::ostream &EOF_ACTION_SWITCH() = 0;
 
-	std::ostream &TO_STATE_ACTIONS();
-	std::ostream &FROM_STATE_ACTIONS();
-	std::ostream &EOF_ACTIONS();
+	std::ostream &ACTIONS_ARRAY();
 
 	void setTableState( TableArray::State );
 
-	virtual std::ostream &COND_GOTO( RedCondPair *trans, int level );
+	virtual std::ostream &COND_GOTO( RedCondPair *trans );
 
 	string CKEY( CondKey key );
-	void COND_B_SEARCH( RedTransAp *trans, int level, CondKey lower, CondKey upper, int low, int high);
+	void COND_B_SEARCH( RedTransAp *trans, CondKey lower, CondKey upper, int low, int high);
 
-	virtual std::ostream &TRANS_GOTO( RedTransAp *trans, int level );
+	virtual std::ostream &TRANS_GOTO( RedTransAp *trans );
 
 	void SINGLE_SWITCH( RedStateAp *state );
-	void RANGE_B_SEARCH( RedStateAp *state, int level, Key lower, Key upper, int low, int high );
+	void RANGE_B_SEARCH( RedStateAp *state, Key lower, Key upper, int low, int high );
 
 	/* Called from STATE_GOTOS just before writing the gotos */
 	virtual void GOTO_HEADER( RedStateAp *state );
@@ -111,8 +205,14 @@ public:
 	virtual void NFA_POP_TEST( RedNfaTarg *targ ) {}
 	virtual void NFA_FROM_STATE_ACTION_EXEC() = 0;
 
-	void NFA_PUSH();
-	void NFA_POP();
+	void NFA_POP() {}
+
+	virtual void FROM_STATE_ACTIONS() = 0;
+	virtual void TO_STATE_ACTIONS() = 0;
+	virtual void REG_ACTIONS() = 0;
+	virtual void EOF_ACTIONS() = 0;
+
+	IpLabel *allocateLabels( IpLabel *labels, IpLabel::Type type, int n );
 };
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -27,41 +27,126 @@
 
 #include <assert.h>
 
-Binary::Binary( const CodeGenArgs &args )
-:
-	CodeGen( args ),
-	keyOffsets(         "key_offsets",           *this ),
-	singleLens(         "single_lengths",        *this ),
-	rangeLens(          "range_lengths",         *this ),
-	indexOffsets(       "index_offsets",         *this ),
-	indicies(           "indicies",              *this ),
-	transCondSpacesWi(  "trans_cond_spaces_wi",  *this ),
-	transOffsetsWi(     "trans_offsets_wi",      *this ),
-	transLengthsWi(     "trans_lengths_wi",      *this ),
-	transCondSpaces(    "trans_cond_spaces",     *this ),
-	transOffsets(       "trans_offsets",         *this ),
-	transLengths(       "trans_lengths",         *this ),
-	condTargs(          "cond_targs",            *this ),
-	condActions(        "cond_actions",          *this ),
-	toStateActions(     "to_state_actions",      *this ),
-	fromStateActions(   "from_state_actions",    *this ),
-	eofActions(         "eof_actions",           *this ),
-	eofTransDirect(     "eof_trans_direct",      *this ),
-	eofTransIndexed(    "eof_trans_indexed",     *this ),
-	actions(            "actions",               *this ),
-	keys(               "trans_keys",            *this ),
-	condKeys(           "cond_keys",             *this ),
-	nfaTargs(           "nfa_targs",             *this ),
-	nfaOffsets(         "nfa_offsets",           *this ),
-	nfaPushActions(     "nfa_push_actions",      *this ),
-	nfaPopTrans(        "nfa_pop_trans",         *this )
+void Binary::genAnalysis()
 {
+	redFsm->sortByStateId();
+
+	/* Choose default transitions and the single transition. */
+	redFsm->chooseDefaultSpan();
+		
+	/* Choose the singles. */
+	redFsm->moveSelectTransToSingle();
+
+	if ( redFsm->errState != 0 )
+		redFsm->getErrorCond();
+
+	/* If any errors have occured in the input file then don't write anything. */
+	if ( red->id->errorCount > 0 )
+		return;
+
+	/* Anlayze Machine will find the final action reference counts, among other
+	 * things. We will use these in reporting the usage of fsm directives in
+	 * action code. */
+	red->analyzeMachine();
+
+	setKeyType();
+
+	/* Run the analysis pass over the table data. */
+	setTableState( TableArray::AnalyzePass );
+	tableDataPass();
+
+	/* Switch the tables over to the code gen mode. */
+	setTableState( TableArray::GeneratePass );
 }
+
+
+void Binary::tableDataPass()
+{
+	if ( type == Loop )
+		taActions();
+
+	taKeyOffsets();
+	taSingleLens();
+	taRangeLens();
+	taIndexOffsets();
+	taIndicies();
+
+	taTransCondSpacesWi();
+	taTransOffsetsWi();
+	taTransLengthsWi();
+
+	taTransCondSpaces();
+	taTransOffsets();
+	taTransLengths();
+
+	taCondTargs();
+	taCondActions();
+
+	taToStateActions();
+	taFromStateActions();
+	taEofActions();
+	taEofConds();
+	taEofTrans();
+
+	taKeys();
+	taCondKeys();
+
+	taNfaTargs();
+	taNfaOffsets();
+	taNfaPushActions();
+	taNfaPopTrans();
+}
+
+void Binary::writeData()
+{
+	if ( type == Loop ) {
+		/* If there are any transtion functions then output the array. If there
+		 * are none, don't bother emitting an empty array that won't be used. */
+		if ( redFsm->anyActions() )
+			taActions();
+	}
+
+	taKeyOffsets();
+	taKeys();
+	taSingleLens();
+	taRangeLens();
+	taIndexOffsets();
+
+	taTransCondSpaces();
+	taTransOffsets();
+	taTransLengths();
+
+	taCondKeys();
+	taCondTargs();
+	taCondActions();
+
+	if ( redFsm->anyToStateActions() )
+		taToStateActions();
+
+	if ( redFsm->anyFromStateActions() )
+		taFromStateActions();
+
+	if ( redFsm->anyEofActions() )
+		taEofActions();
+
+	taEofConds();
+
+	if ( redFsm->anyEofTrans() )
+		taEofTrans();
+
+	taNfaTargs();
+	taNfaOffsets();
+	taNfaPushActions();
+	taNfaPopTrans();
+
+	STATE_IDS();
+}
+
 
 void Binary::setKeyType()
 {
-	keys.setType( ALPH_TYPE(), alphType->size, alphType->isChar );
-	keys.isSigned = keyOps->isSigned;
+	transKeys.setType( ALPH_TYPE(), alphType->size, alphType->isChar );
+	transKeys.isSigned = keyOps->isSigned;
 }
 
 void Binary::setTableState( TableArray::State state )
@@ -156,9 +241,71 @@ void Binary::taEofActions()
 	eofActions.finish();
 }
 
-void Binary::taEofTransDirect()
+void Binary::taEofConds()
 {
-	eofTransDirect.start();
+	/*
+	 * EOF Cond Spaces
+	 */
+	eofCondSpaces.start();
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		if ( st->outCondSpace != 0 )
+			eofCondSpaces.value( st->outCondSpace->condSpaceId );
+		else
+			eofCondSpaces.value( -1 );
+	}
+	eofCondSpaces.finish();
+
+	/*
+	 * EOF Cond Key Indixes
+	 */
+	eofCondKeyOffs.start();
+
+	int curOffset = 0;
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		long off = 0;
+		if ( st->outCondSpace != 0 ) {
+			off = curOffset;
+			curOffset += st->outCondKeys.length();
+		}
+		eofCondKeyOffs.value( off );
+	}
+
+	eofCondKeyOffs.finish();
+
+	/*
+	 * EOF Cond Key Lengths.
+	 */
+	eofCondKeyLens.start();
+
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		long len = 0;
+		if ( st->outCondSpace != 0 )
+			len = st->outCondKeys.length();
+		eofCondKeyLens.value( len );
+	}
+
+	eofCondKeyLens.finish();
+
+	/*
+	 * EOF Cond Keys
+	 */
+	eofCondKeys.start();
+
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		if ( st->outCondSpace != 0 ) {
+			for ( int c = 0; c < st->outCondKeys.length(); c++ ) {
+				CondKey key = st->outCondKeys[c];
+				eofCondKeys.value( key.getVal() );
+			}
+		}
+	}
+
+	eofCondKeys.finish();
+}
+
+void Binary::taEofTrans()
+{
+	eofTrans.start();
 
 	/* Need to compute transition positions. */
 	int totalTrans = 0;
@@ -176,55 +323,33 @@ void Binary::taEofTransDirect()
 			totalTrans += 1;
 		}
 
-		eofTransDirect.value( trans );
+		eofTrans.value( trans );
 	}
 
-	eofTransDirect.finish();
-}
-
-void Binary::taEofTransIndexed()
-{
-	/* Transitions must be written ordered by their id. */
-	long t = 0, *transPos = new long[redFsm->transSet.length()];
-	for ( TransApSet::Iter trans = redFsm->transSet; trans.lte(); trans++ )
-		transPos[trans->id] = t++;
-
-	eofTransIndexed.start();
-
-	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
-		long trans = 0;
-		if ( st->eofTrans != 0 )
-			trans = transPos[st->eofTrans->id] + 1;
-
-		eofTransIndexed.value( trans );
-	}
-
-	eofTransIndexed.finish();
-
-	delete[] transPos;
+	eofTrans.finish();
 }
 
 void Binary::taKeys()
 {
-	keys.start();
+	transKeys.start();
 
 	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
 		/* Loop the singles. */
 		for ( RedTransList::Iter stel = st->outSingle; stel.lte(); stel++ ) {
-			keys.value( stel->lowKey.getVal() );
+			transKeys.value( stel->lowKey.getVal() );
 		}
 
 		/* Loop the state's transitions. */
 		for ( RedTransList::Iter rtel = st->outRange; rtel.lte(); rtel++ ) {
 			/* Lower key. */
-			keys.value( rtel->lowKey.getVal() );
+			transKeys.value( rtel->lowKey.getVal() );
 
 			/* Upper key. */
-			keys.value( rtel->highKey.getVal() );
+			transKeys.value( rtel->highKey.getVal() );
 		}
 	}
 
-	keys.finish();
+	transKeys.finish();
 }
 
 void Binary::taIndicies()
@@ -331,6 +456,8 @@ void Binary::taTransOffsets()
 			curOffset += trans->numConds();
 		}
 	}
+
+	errCondOffset = curOffset;
 
 	transOffsets.finish();
 }
@@ -507,6 +634,11 @@ void Binary::taCondTargs()
 		}
 	}
 
+	if ( redFsm->errCond != 0 ) {
+		RedCondPair *cond = &redFsm->errCond->p;
+		condTargs.value( cond->targ->id );
+	}
+
 	condTargs.finish();
 }
 
@@ -552,6 +684,11 @@ void Binary::taCondActions()
 				COND_ACTION( cond );
 			}
 		}
+	}
+
+	if ( redFsm->errCond != 0 ) {
+		RedCondPair *cond = &redFsm->errCond->p;
+		COND_ACTION( cond );
 	}
 
 	condActions.finish();
@@ -677,433 +814,6 @@ void Binary::taActions()
 	actions.finish();
 }
 
-void Binary::NFA_PUSH()
-{
-	if ( redFsm->anyNfaStates() ) {
-		out <<
-			"	if ( " << ARR_REF( nfaOffsets ) << "[" << vCS() << "] ) {\n"
-			"		int alt = 0; \n"
-			"		int new_recs = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
-						ARR_REF( nfaOffsets ) << "[" << vCS() << "]];\n";
 
-		if ( red->nfaPrePushExpr != 0 ) {
-			out << OPEN_HOST_BLOCK( red->nfaPrePushExpr );
-			INLINE_LIST( out, red->nfaPrePushExpr->inlineList, 0, false, false );
-			out << CLOSE_HOST_BLOCK();
-		}
 
-		out <<
-			"		while ( alt < new_recs ) { \n";
 
-
-		out <<
-			"			nfa_bp[nfa_len].state = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
-							ARR_REF( nfaOffsets ) << "[" << vCS() << "] + 1 + alt];\n"
-			"			nfa_bp[nfa_len].p = " << P() << ";\n";
-
-		if ( redFsm->bAnyNfaPops ) {
-			out <<
-				"			nfa_bp[nfa_len].popTrans = " << CAST("long") <<
-								ARR_REF( nfaOffsets ) << "[" << vCS() << "] + 1 + alt;\n"
-				"\n"
-				;
-		}
-
-		if ( redFsm->bAnyNfaPushes ) {
-			out <<
-				"			switch ( " << ARR_REF( nfaPushActions ) << "[" << CAST("int") <<
-								ARR_REF( nfaOffsets ) << "[" << vCS() << "] + 1 + alt] ) {\n";
-
-			/* Loop the actions. */
-			for ( GenActionTableMap::Iter redAct = redFsm->actionMap;
-					redAct.lte(); redAct++ )
-			{
-				if ( redAct->numNfaPushRefs > 0 ) {
-					/* Write the entry label. */
-					out << "\t " << CASE( STR( redAct->actListId+1 ) ) << " {\n";
-
-					/* Write each action in the list of action items. */
-					for ( GenActionTable::Iter item = redAct->key; item.lte(); item++ )
-						ACTION( out, item->value, IlOpts( 0, false, false ) );
-
-					out << "\n\t" << CEND() << "}\n";
-				}
-			}
-
-			out <<
-				"			}\n";
-		}
-
-
-		out <<
-			"			nfa_len += 1;\n"
-			"			alt += 1;\n"
-			"		}\n"
-			"	}\n"
-			;
-	}
-}
-
-void Binary::NFA_POP()
-{
-	if ( redFsm->anyNfaStates() ) {
-		out <<
-			"	if ( nfa_len > 0 ) {\n"
-			"		nfa_count += 1;\n"
-			"		nfa_len -= 1;\n"
-			"		" << P() << " = nfa_bp[nfa_len].p;\n"
-			;
-
-		if ( redFsm->bAnyNfaPops ) {
-			NFA_FROM_STATE_ACTION_EXEC();
-
-			out << 
-				"		int _pop_test = 1;\n"
-				"		switch ( " << ARR_REF( nfaPopTrans ) <<
-							"[nfa_bp[nfa_len].popTrans] ) {\n";
-
-			/* Loop the actions. */
-			for ( GenActionTableMap::Iter redAct = redFsm->actionMap;
-					redAct.lte(); redAct++ )
-			{
-				if ( redAct->numNfaPopTestRefs > 0 ) {
-					/* Write the entry label. */
-					out << "\t " << CASE( STR( redAct->actListId+1 ) ) << " {\n";
-
-					/* Write each action in the list of action items. */
-					for ( GenActionTable::Iter item = redAct->key; item.lte(); item++ )
-						NFA_CONDITION( out, item->value, item.last() );
-
-					out << "\n\t" << CEND() << "}\n";
-				}
-			}
-
-			out <<
-				"		}\n";
-
-			out <<
-				"		if ( _pop_test ) {\n"
-				"			" << vCS() << " = nfa_bp[nfa_len].state;\n";
-
-			if ( red->nfaPostPopExpr != 0 ) {
-				out << OPEN_HOST_BLOCK( red->nfaPostPopExpr );
-				INLINE_LIST( out, red->nfaPostPopExpr->inlineList, 0, false, false );
-				out << CLOSE_HOST_BLOCK();
-			}
-
-			out <<
-				"			goto _resume;\n"
-				"		}\n";
-
-			if ( red->nfaPostPopExpr != 0 ) {
-				out <<
-				"			else {\n"
-				"			" << OPEN_HOST_BLOCK( red->nfaPostPopExpr );
-				INLINE_LIST( out, red->nfaPostPopExpr->inlineList, 0, false, false );
-				out << CLOSE_HOST_BLOCK() << "\n"
-				"			}\n";
-			}
-		}
-		else {
-			out <<
-				"		" << vCS() << " = nfa_bp[nfa_len].state;\n";
-
-			if ( red->nfaPostPopExpr != 0 ) {
-				out << OPEN_HOST_BLOCK( red->nfaPostPopExpr );
-				INLINE_LIST( out, red->nfaPostPopExpr->inlineList, 0, false, false );
-				out << CLOSE_HOST_BLOCK();
-			}
-
-			out <<
-				"		goto _resume;\n";
-		}
-
-		out << 
-			"		goto _out;\n"
-			"	}\n";
-	}
-}
-
-
-void Binary::LOCATE_TRANS()
-{
-	out <<
-		"	_keys = " << OFFSET( ARR_REF( keys ), ARR_REF( keyOffsets ) + "[" + vCS() + "]" ) << ";\n"
-		"	_trans = " << CAST(UINT()) << ARR_REF( indexOffsets ) << "[" << vCS() << "];\n"
-		"\n"
-		"	_klen = " << CAST( "int" ) << ARR_REF( singleLens ) << "[" << vCS() << "];\n"
-		"	if ( _klen > 0 ) {\n"
-		"		" << INDEX( ALPH_TYPE(), "_lower" ) << ";\n"
-		"		" << INDEX( ALPH_TYPE(), "_mid" ) << ";\n"
-		"		" << INDEX( ALPH_TYPE(), "_upper" ) << ";\n"
-		"		_lower = _keys;\n"
-		"		_upper = _keys + _klen - 1;\n"
-		"		while ( " << TRUE() << " ) {\n"
-		"			if ( _upper < _lower )\n"
-		"				break;\n"
-		"\n"
-		"			_mid = _lower + ((_upper-_lower) >> 1);\n"
-		"			if ( " << GET_KEY() << " < " << DEREF( ARR_REF( keys ), "_mid" ) << " )\n"
-		"				_upper = _mid - 1;\n"
-		"			else if ( " << GET_KEY() << " > " << DEREF( ARR_REF( keys ), "_mid" ) << " )\n"
-		"				_lower = _mid + 1;\n"
-		"			else {\n"
-		"				_trans += " << CAST( UINT() ) << "(_mid - _keys);\n"
-		"				goto _match;\n"
-		"			}\n"
-		"		}\n"
-		"		_keys += _klen;\n"
-		"		_trans += " << CAST( UINT() ) << "_klen;\n"
-		"	}\n"
-		"\n"
-		"	_klen = " << CAST("int") << ARR_REF( rangeLens ) << "[" << vCS() << "];\n"
-		"	if ( _klen > 0 ) {\n"
-		"		" << INDEX( ALPH_TYPE(), "_lower" ) << ";\n"
-		"		" << INDEX( ALPH_TYPE(), "_mid" ) << ";\n"
-		"		" << INDEX( ALPH_TYPE(), "_upper" ) << ";\n"
-		"		_lower = _keys;\n"
-		"		_upper = _keys + (_klen<<1) - 2;\n"
-		"		while ( " << TRUE() << " ) {\n"
-		"			if ( _upper < _lower )\n"
-		"				break;\n"
-		"\n"
-		"			_mid = _lower + (((_upper-_lower) >> 1) & ~1);\n"
-		"			if ( " << GET_KEY() << " < " << DEREF( ARR_REF( keys ), "_mid" ) << " )\n"
-		"				_upper = _mid - 2;\n"
-		"			else if ( " << GET_KEY() << " > " << DEREF( ARR_REF( keys ), "_mid + 1" ) << " )\n"
-		"				_lower = _mid + 2;\n"
-		"			else {\n"
-		"				_trans += " << CAST( UINT() ) << "((_mid - _keys)>>1);\n"
-		"				goto _match;\n"
-		"			}\n"
-		"		}\n"
-		"		_trans += " << CAST( UINT() ) << "_klen;\n"
-		"	}\n"
-		"\n";
-}
-
-void Binary::LOCATE_COND()
-{
-	out <<
-		"	_ckeys = " << OFFSET( ARR_REF( condKeys ), ARR_REF( transOffsets ) + "[_trans]" ) << ";\n"
-		"	_klen = " << CAST( "int" ) << ARR_REF( transLengths ) << "[_trans];\n"
-		"	_cond = " << CAST( UINT() ) << ARR_REF( transOffsets ) << "[_trans];\n"
-		"\n";
-
-	out <<
-		"	_cpc = 0;\n";
-	
-	if ( red->condSpaceList.length() > 0 ) {
-		out <<
-			"	switch ( " << ARR_REF( transCondSpaces ) << "[_trans] ) {\n"
-			"\n";
-
-		for ( CondSpaceList::Iter csi = red->condSpaceList; csi.lte(); csi++ ) {
-			GenCondSpace *condSpace = csi;
-			out << "	" << CASE( STR( condSpace->condSpaceId ) ) << " {\n";
-			for ( GenCondSet::Iter csi = condSpace->condSet; csi.lte(); csi++ ) {
-				out << TABS(2) << "if ( ";
-				CONDITION( out, *csi );
-				Size condValOffset = (1 << csi.pos());
-				out << " ) _cpc += " << condValOffset << ";\n";
-			}
-
-			out << 
-				"	" << CEND() << "}\n";
-		}
-
-		out << 
-			"	}\n";
-	}
-	
-	out <<
-		"	{\n"
-		"		" << INDEX( ARR_TYPE( condKeys ), "_lower" ) << ";\n"
-		"		" << INDEX( ARR_TYPE( condKeys ), "_mid" ) << ";\n"
-		"		" << INDEX( ARR_TYPE( condKeys ), "_upper" ) << ";\n"
-		"		_lower = _ckeys;\n"
-		"		_upper = _ckeys + _klen - 1;\n"
-		"		while ( " << TRUE() << " ) {\n"
-		"			if ( _upper < _lower )\n"
-		"				break;\n"
-		"\n"
-		"			_mid = _lower + ((_upper-_lower) >> 1);\n"
-		"			if ( _cpc < " << CAST("int") << DEREF( ARR_REF( condKeys ), "_mid" ) << " )\n"
-		"				_upper = _mid - 1;\n"
-		"			else if ( _cpc > " << CAST( "int" ) << DEREF( ARR_REF( condKeys ), "_mid" ) << " )\n"
-		"				_lower = _mid + 1;\n"
-		"			else {\n"
-		"				_cond += " << CAST( UINT() ) << "(_mid - _ckeys);\n"
-		"				goto _match_cond;\n"
-		"			}\n"
-		"		}\n"
-		"		" << vCS() << " = " << ERROR_STATE() << ";\n"
-		"		goto _again;\n"
-		"	}\n"
-	;
-}
-
-void Binary::GOTO( ostream &ret, int gotoDest, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << vCS() << " = " << gotoDest <<	";";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << " goto _again;" << CLOSE_GEN_BLOCK();
-}
-
-void Binary::GOTO_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << vCS() << " = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, 0, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << ";";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-	
-	ret << " goto _again;";
-	
-	ret << CLOSE_GEN_BLOCK();
-}
-
-void Binary::CURS( ostream &ret, bool inFinish )
-{
-	ret << OPEN_GEN_EXPR() << "_ps" << CLOSE_GEN_EXPR();
-}
-
-void Binary::TARGS( ostream &ret, bool inFinish, int targState )
-{
-	ret << OPEN_GEN_EXPR() << vCS() << CLOSE_GEN_EXPR();
-}
-
-void Binary::NEXT( ostream &ret, int nextDest, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << vCS() << " = " << nextDest << ";" << CLOSE_GEN_BLOCK();
-}
-
-void Binary::NEXT_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << "" << vCS() << " = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, 0, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << ";" << CLOSE_GEN_BLOCK();
-}
-
-void Binary::CALL( ostream &ret, int callDest, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " <<
-			vCS() << "; " << TOP() << " += 1;" << vCS() << " = " << 
-			callDest << ";";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << " goto _again;";
-
-	ret << CLOSE_GEN_BLOCK();
-}
-
-void Binary::CALL_EXPR( ostream &ret, GenInlineItem *ilItem, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " <<
-			vCS() << "; " << TOP() << " += 1;" << vCS() <<
-			" = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, targState, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << ";";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << " goto _again;";
-
-	ret << CLOSE_GEN_BLOCK();
-}
-
-void Binary::NCALL( ostream &ret, int callDest, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " <<
-			vCS() << "; " << TOP() << " += 1;" << vCS() << " = " << 
-			callDest << "; " << CLOSE_GEN_BLOCK();
-}
-
-void Binary::NCALL_EXPR( ostream &ret, GenInlineItem *ilItem, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " <<
-			vCS() << "; " << TOP() << " += 1;" << vCS() <<
-			" = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, targState, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << "; " << CLOSE_GEN_BLOCK();
-}
-
-void Binary::RET( ostream &ret, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << TOP() << "-= 1;" << vCS() << " = " << STACK() << "[" << TOP() << "]; ";
-
-	if ( red->postPopExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->postPopExpr );
-		INLINE_LIST( ret, red->postPopExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << "goto _again;" << CLOSE_GEN_BLOCK();
-}
-
-void Binary::NRET( ostream &ret, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << TOP() << "-= 1;" << vCS() << " = " << STACK() << "[" << TOP() << "]; ";
-
-	if ( red->postPopExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->postPopExpr );
-		INLINE_LIST( ret, red->postPopExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << CLOSE_GEN_BLOCK();
-}
-
-void Binary::BREAK( ostream &ret, int targState, bool csForced )
-{
-	outLabelUsed = true;
-	ret << OPEN_GEN_BLOCK() << P() << "+= 1; " << "goto _out; " << CLOSE_GEN_BLOCK();
-}
-
-void Binary::NBREAK( ostream &ret, int targState, bool csForced )
-{
-	outLabelUsed = true;
-	ret << OPEN_GEN_BLOCK() << P() << "+= 1; " << " _nbreak = 1;" << CLOSE_GEN_BLOCK();
-}

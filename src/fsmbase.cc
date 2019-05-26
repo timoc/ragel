@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2016 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -503,6 +503,26 @@ void FsmAp::markReachableFromHere( StateAp *state )
 		for ( StateSet::Iter ss = state->stateDictEl->stateSet; ss.lte(); ss++ )
 			markReachableFromHere( *ss );
 	}
+}
+
+/* Any transitions to another state? */
+bool FsmAp::anyRegularTransitions( StateAp *state )
+{
+	for ( TransList::Iter trans = state->outList; trans.lte(); trans++ ) {
+		if ( trans->plain() ) {
+			StateAp *toState = trans->tdap()->toState;
+			if ( toState != 0 )
+				return true;
+		}
+		else {
+			for ( CondList::Iter cond = trans->tcap()->condList; cond.lte(); cond++ ) {
+				StateAp *toState = cond->toState;
+				if ( toState != 0 )
+					return true;
+			}
+		}
+	}
+	return false;
 }
 
 void FsmAp::markReachableFromHereStopFinal( StateAp *state )

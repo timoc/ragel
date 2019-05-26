@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -301,6 +301,9 @@ struct LongestMatchPart
 	Action *actOnLast;
 	Action *actOnNext;
 	Action *actLagBehind;
+	Action *actNfaOnLast;
+	Action *actNfaOnNext;
+	Action *actNfaOnEof;
 	int longestMatchId;
 	bool inLmSelect;
 	LongestMatch *longestMatch;
@@ -314,12 +317,35 @@ struct LmPartList : DList<LongestMatchPart> {};
 struct LongestMatch
 {
 	/* Construct with a list of joins */
-	LongestMatch( const InputLoc &loc, LmPartList *longestMatchList ) : 
-		loc(loc), longestMatchList(longestMatchList),
-		lmSwitchHandlesError(false) { }
+	LongestMatch( const InputLoc &loc, LmPartList *longestMatchList )
+	: 
+		loc(loc),
+		longestMatchList(longestMatchList),
+		lmSwitchHandlesError(false),
+		nfaConstruction(false)
+	{ }
+
+	InputLoc loc;
+	LmPartList *longestMatchList;
+	std::string name;
+	Action *lmActSelect;
+	bool lmSwitchHandlesError;
+	bool nfaConstruction;
+
+	LongestMatch *next, *prev;
 
 	/* Tree traversal. */
+	FsmRes walkClassic( ParseData *pd );
 	FsmRes walk( ParseData *pd );
+
+	FsmRes mergeNfaStates( ParseData *pd, FsmAp *fsm );
+	bool onlyOneNfa( ParseData *pd, FsmAp *fsm, StateAp *st, NfaTrans *in );
+	bool matchCanFail( ParseData *pd, FsmAp *fsm, StateAp *st );
+	void eliminateNfaActions( ParseData *pd, FsmAp *fsm );
+	void advanceNfaActions( ParseData *pd, FsmAp *fsm );
+	FsmRes buildBaseNfa( ParseData *pd );
+	FsmRes walkNfa( ParseData *pd );
+
 	void makeNameTree( ParseData *pd );
 	void resolveNameRefs( ParseData *pd );
 	void transferScannerLeavingActions( FsmAp *graph );
@@ -329,15 +355,7 @@ struct LongestMatch
 	void makeActions( ParseData *pd );
 	void findName( ParseData *pd );
 	void restart( FsmAp *graph, TransAp *trans );
-
-	InputLoc loc;
-	LmPartList *longestMatchList;
-	std::string name;
-
-	Action *lmActSelect;
-	bool lmSwitchHandlesError;
-
-	LongestMatch *next, *prev;
+	void restart( FsmAp *graph, CondAp *cond );
 };
 
 
@@ -646,9 +664,16 @@ struct Factor
 		ParenType,
 		LongestMatchType,
 		NfaRep,
+		NfaWrap,
 		CondStar,
 		CondPlus
 	}; 
+
+	enum NfaRepeatMode {
+		NfaLegacy = 1,
+		NfaGreedy,
+		NfaLazy
+	};
 
 	/* Construct with a literal fsm. */
 	Factor( Literal *literal ) :
@@ -714,6 +739,7 @@ struct Factor
 	Action *action5;
 	Action *action6;
 	PriorDesc priorDescs[4];
+	NfaRepeatMode mode;
 
 	Type type;
 };

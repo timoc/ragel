@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -33,40 +33,38 @@ struct RedTransAp;
 struct RedStateAp;
 struct GenStateCond;
 
-class SwitchLoopGoto
+class GotoLoop
 	: public Goto
 {
 public:
-	SwitchLoopGoto( const CodeGenArgs &args ) 
-		: Goto(args) {}
+	GotoLoop( const CodeGenArgs &args ) 
+		: Goto(args, Loop) {}
 
-	void tableDataPass();
-
-	std::ostream &ACTION_SWITCH();
-	std::ostream &EXEC_FUNCS();
-	std::ostream &TO_STATE_ACTION_SWITCH();
-	std::ostream &FROM_STATE_ACTION_SWITCH();
-	std::ostream &EOF_ACTION_SWITCH();
+	virtual std::ostream &ACTION_SWITCH();
+	virtual std::ostream &EXEC_FUNCS();
+	virtual std::ostream &TO_STATE_ACTION_SWITCH();
+	virtual std::ostream &FROM_STATE_ACTION_SWITCH();
+	virtual std::ostream &EOF_ACTION_SWITCH();
 
 	virtual void NFA_PUSH_ACTION( RedNfaTarg *targ );
 	virtual void NFA_POP_TEST( RedNfaTarg *targ );
 	virtual void NFA_FROM_STATE_ACTION_EXEC();
 
-	/* Interface. */
-	virtual void genAnalysis();
-	virtual void writeData();
-	virtual void writeExec();
+	virtual void FROM_STATE_ACTIONS();
+	virtual void TO_STATE_ACTIONS();
+	virtual void REG_ACTIONS();
+	virtual void EOF_ACTIONS();
 };
 
 namespace C
 {
-	class SwitchLoopGoto
+	class GotoLoop
 	:
-		public ::SwitchLoopGoto
+		public ::GotoLoop
 	{
 	public:
-		SwitchLoopGoto( const CodeGenArgs &args )
-			: ::SwitchLoopGoto( args )
+		GotoLoop( const CodeGenArgs &args )
+			: ::GotoLoop( args )
 		{}
 	};
 }

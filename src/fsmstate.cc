@@ -1,5 +1,5 @@
 /*
- * Copyright 2002 Adrian Thurston <thurston@colm.net>
+ * Copyright 2002-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -110,7 +110,8 @@ StateAp::StateAp()
 	outCondKeys(),
 	errActionTable(),
 	eofActionTable(),
-	guardedInTable()
+	guardedInTable(),
+	lmNfaParts()
 {
 }
 
@@ -160,7 +161,8 @@ StateAp::StateAp(const StateAp &other)
 	errActionTable(other.errActionTable),
 	eofActionTable(other.eofActionTable),
 
-	guardedInTable(other.guardedInTable)
+	guardedInTable(other.guardedInTable),
+	lmNfaParts(other.lmNfaParts)
 {
 	/* Duplicate all the transitions. */
 	for ( TransList::Iter trans = other.outList; trans.lte(); trans++ ) {

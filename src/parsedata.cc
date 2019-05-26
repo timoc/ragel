@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2008 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -1020,7 +1020,7 @@ bool ParseData::setVariable( const char *var, InlineList *inlineList )
 void ParseData::initKeyOps( const HostLang *hostLang )
 {
 	/* Signedness and bounds. */
-	alphType = alphTypeSet ? userAlphType : hostLang->defaultAlphType;
+	alphType = alphTypeSet ? userAlphType : &hostLang->hostTypes[hostLang->defaultAlphType];
 	fsmCtx->keyOps->setAlphType( hostLang, alphType );
 
 	if ( lowerNum != 0 ) {
@@ -1101,8 +1101,9 @@ void ParseData::initLongestMatchData()
 }
 
 /* After building the graph, do some extra processing to ensure the runtime
- * data of the longest mactch operators is consistent. */
-void ParseData::setLongestMatchData( FsmAp *graph )
+ * data of the longest mactch operators is consistent. We want tokstart to be
+ * null when no token match is active. */
+void ParseData::longestMatchInitTweaks( FsmAp *graph )
 {
 	if ( lmList.length() > 0 ) {
 		/* Make sure all entry points (targets of fgoto, fcall, fnext, fentry)
@@ -1111,8 +1112,13 @@ void ParseData::setLongestMatchData( FsmAp *graph )
 			/* This is run after duplicates are removed, we must guard against
 			 * inserting a duplicate. */
 			ActionTable &actionTable = en->value->toStateActionTable;
-			if ( ! actionTable.hasAction( initTokStart ) )
+			if ( ! actionTable.hasAction( initTokStart ) ) {
+				/* We do this after the analysis pass, which reference counts
+				 * the actions. Keep them up to date so we don't break the
+				 * build. */
+				initTokStart->numToStateRefs += 1;
 				actionTable.setAction( initTokStartOrd, initTokStart );
+			}
 		}
 
 		/* Find the set of states that are the target of transitions with
@@ -1144,8 +1150,13 @@ void ParseData::setLongestMatchData( FsmAp *graph )
 			/* This is run after duplicates are removed, we must guard against
 			 * inserting a duplicate. */
 			ActionTable &actionTable = (*ps)->toStateActionTable;
-			if ( ! actionTable.hasAction( initTokStart ) )
+			if ( ! actionTable.hasAction( initTokStart ) ) {
+				/* We do this after the analysis pass, which reference counts
+				 * the actions. Keep them up to date so we don't break the
+				 * build. */
+				initTokStart->numToStateRefs += 1;
 				actionTable.setAction( initTokStartOrd, initTokStart );
+			}
 		}
 	}
 }
@@ -1216,9 +1227,6 @@ void ParseData::reportAnalysisResult( FsmRes &res )
 
 	else if ( res.type == FsmRes::TypePriorInteraction )
 		analysisResult( 60, res.id, "prior-interaction" );
-
-	else if ( res.type == FsmRes::TypeRepetitionError )
-		analysisResult( 2, 0, "rep-error" );
 }
 
 
@@ -1430,7 +1438,7 @@ FsmRes ParseData::prepareMachineGen( GraphDictEl *graphDictEl, const HostLang *h
 	fsmCtx->analyzeGraph( sectionGraph );
 
 	/* Depends on the graph analysis. */
-	setLongestMatchData( sectionGraph );
+	longestMatchInitTweaks( sectionGraph );
 
 	fsmCtx->prepareReduction( sectionGraph );
 
@@ -1446,9 +1454,11 @@ void ParseData::generateReduced( const char *inputFileName, CodeStyle codeStyle,
 	CodeGenArgs args( this->id, red, alphType, machineId, inputFileName, sectionName, out, codeStyle );
 
 	args.lineDirectives = !id->noLineDirectives;
+	args.forceVar = id->forceVar;
+	args.loopLabels = hostLang->loopLabels;
 
 	/* Write out with it. */
-	cgd = makeCodeGen( hostLang, args );
+	cgd = (*hostLang->makeCodeGen)( hostLang, args );
 
 	/* Code generation anlysis step. */
 	cgd->genAnalysis();

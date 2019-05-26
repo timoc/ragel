@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2014 Adrian Thurston <thurston@colm.net>
+ * Copyright 2004-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -25,33 +25,115 @@
 #include "redfsm.h"
 #include "gendata.h"
 
-Flat::Flat( const CodeGenArgs &args ) 
-:
-	CodeGen( args ),
-	actions(          "actions",             *this ),
-	keys(             "trans_keys",          *this ),
-	charClass(        "char_class",          *this ),
-	flatIndexOffset(  "index_offsets",       *this ),
-	indicies(         "indicies",            *this ),
-	indexDefaults(    "index_defaults",      *this ),
-	transCondSpaces(  "trans_cond_spaces",   *this ),
-	transOffsets(     "trans_offsets",       *this ),
-	condTargs(        "cond_targs",          *this ),
-	condActions(      "cond_actions",        *this ),
-	toStateActions(   "to_state_actions",    *this ),
-	fromStateActions( "from_state_actions",  *this ),
-	eofActions(       "eof_actions",         *this ),
-	eofTrans(         "eof_trans",           *this ),
-	nfaTargs(         "nfa_targs",           *this ),
-	nfaOffsets(       "nfa_offsets",         *this ),
-	nfaPushActions(   "nfa_push_actions",    *this ),
-	nfaPopTrans(      "nfa_pop_trans",       *this )
-{}
+void Flat::genAnalysis()
+{
+	redFsm->sortByStateId();
+
+	/* Choose default transitions and the single transition. */
+	redFsm->chooseDefaultSpan();
+		
+	/* Do flat expand. */
+	redFsm->makeFlatClass();
+
+	/* If any errors have occured in the input file then don't write anything. */
+	if ( red->id->errorCount > 0 )
+		return;
+
+	/* Anlayze Machine will find the final action reference counts, among other
+	 * things. We will use these in reporting the usage of fsm directives in
+	 * action code. */
+	red->analyzeMachine();
+
+	setKeyType();
+
+	/* Run the analysis pass over the table data. */
+	setTableState( TableArray::AnalyzePass );
+	tableDataPass();
+
+	/* Switch the tables over to the code gen mode. */
+	setTableState( TableArray::GeneratePass );
+}
+
+void Flat::tableDataPass()
+{
+	if ( type == Flat::Loop ) {
+		if ( redFsm->anyActions() )
+			taActions();
+	}
+
+	taKeys();
+	taCharClass();
+	taFlatIndexOffset();
+
+	taIndicies();
+	taIndexDefaults();
+	taTransCondSpaces();
+
+	if ( red->condSpaceList.length() > 0 )
+		taTransOffsets();
+
+	taCondTargs();
+	taCondActions();
+
+	taToStateActions();
+	taFromStateActions();
+	taEofConds();
+	taEofActions();
+	taEofTrans();
+	taNfaTargs();
+	taNfaOffsets();
+	taNfaPushActions();
+	taNfaPopTrans();
+}
+
+void Flat::writeData()
+{
+	if ( type == Flat::Loop ) {
+		/* If there are any transtion functions then output the array. If there
+		 * are none, don't bother emitting an empty array that won't be used. */
+		if ( redFsm->anyActions() )
+			taActions();
+	}
+
+	taKeys();
+	taCharClass();
+	taFlatIndexOffset();
+
+	taIndicies();
+	taIndexDefaults();
+	taTransCondSpaces();
+	if ( red->condSpaceList.length() > 0 )
+		taTransOffsets();
+	taCondTargs();
+	taCondActions();
+
+	if ( redFsm->anyToStateActions() )
+		taToStateActions();
+
+	if ( redFsm->anyFromStateActions() )
+		taFromStateActions();
+
+	taEofConds();
+
+	if ( redFsm->anyEofActions() )
+		taEofActions();
+
+	if ( redFsm->anyEofTrans() )
+		taEofTrans();
+
+	taNfaTargs();
+	taNfaOffsets();
+	taNfaPushActions();
+	taNfaPopTrans();
+
+	STATE_IDS();
+}
+
 
 void Flat::setKeyType()
 {
-	keys.setType( ALPH_TYPE(), alphType->size, alphType->isChar );
-	keys.isSigned = keyOps->isSigned;
+	transKeys.setType( ALPH_TYPE(), alphType->size, alphType->isChar );
+	transKeys.isSigned = keyOps->isSigned;
 }
 
 void Flat::setTableState( TableArray::State state )
@@ -129,6 +211,68 @@ void Flat::taEofActions()
 	eofActions.finish();
 }
 
+void Flat::taEofConds()
+{
+	/*
+	 * EOF Cond Spaces
+	 */
+	eofCondSpaces.start();
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		if ( st->outCondSpace != 0 )
+			eofCondSpaces.value( st->outCondSpace->condSpaceId );
+		else
+			eofCondSpaces.value( -1 );
+	}
+	eofCondSpaces.finish();
+
+	/*
+	 * EOF Cond Key Indixes
+	 */
+	eofCondKeyOffs.start();
+
+	int curOffset = 0;
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		long off = 0;
+		if ( st->outCondSpace != 0 ) {
+			off = curOffset;
+			curOffset += st->outCondKeys.length();
+		}
+		eofCondKeyOffs.value( off );
+	}
+
+	eofCondKeyOffs.finish();
+
+	/*
+	 * EOF Cond Key Lengths.
+	 */
+	eofCondKeyLens.start();
+
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		long len = 0;
+		if ( st->outCondSpace != 0 )
+			len = st->outCondKeys.length();
+		eofCondKeyLens.value( len );
+	}
+
+	eofCondKeyLens.finish();
+
+	/*
+	 * EOF Cond Keys
+	 */
+	eofCondKeys.start();
+
+	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
+		if ( st->outCondSpace != 0 ) {
+			for ( int c = 0; c < st->outCondKeys.length(); c++ ) {
+				CondKey key = st->outCondKeys[c];
+				eofCondKeys.value( key.getVal() );
+			}
+		}
+	}
+
+	eofCondKeys.finish();
+}
+
 void Flat::taEofTrans()
 {
 	/* Transitions must be written ordered by their id. */
@@ -162,22 +306,22 @@ void Flat::taEofTrans()
 
 void Flat::taKeys()
 {
-	keys.start();
+	transKeys.start();
 
 	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
 		if ( st->transList ) {
 			/* Emit just low key and high key. */
-			keys.value( st->low );
-			keys.value( st->high );
+			transKeys.value( st->low );
+			transKeys.value( st->high );
 		}
 		else {
 			/* Emit an impossible range so the driver fails the lookup. */
-			keys.value( 1 );
-			keys.value( 0 );
+			transKeys.value( 1 );
+			transKeys.value( 0 );
 		}
 	}
 
-	keys.finish();
+	transKeys.finish();
 }
 
 void Flat::taIndicies()
@@ -217,8 +361,9 @@ void Flat::taTransCondSpaces()
 
 	/* Transitions must be written ordered by their id. */
 	RedTransAp **transPtrs = new RedTransAp*[redFsm->transSet.length()];
-	for ( TransApSet::Iter trans = redFsm->transSet; trans.lte(); trans++ )
+	for ( TransApSet::Iter trans = redFsm->transSet; trans.lte(); trans++ ) {
 		transPtrs[trans->id] = trans;
+	}
 
 	/* Keep a count of the num of items in the array written. */
 	for ( int t = 0; t < redFsm->transSet.length(); t++ ) {
@@ -422,414 +567,10 @@ void Flat::taNfaOffsets()
 	nfaOffsets.finish();
 }
 
-void Flat::NFA_PUSH()
-{
-	if ( redFsm->anyNfaStates() ) {
-		out <<
-			"	if ( " << ARR_REF( nfaOffsets ) << "[" << vCS() << "] ) {\n"
-			"		int alt = 0; \n"
-			"		int new_recs = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
-						ARR_REF( nfaOffsets ) << "[" << vCS() << "]];\n";
 
-		if ( red->nfaPrePushExpr != 0 ) {
-			out << OPEN_HOST_BLOCK( red->nfaPrePushExpr );
-			INLINE_LIST( out, red->nfaPrePushExpr->inlineList, 0, false, false );
-			out << CLOSE_HOST_BLOCK();
-		}
 
-		out <<
-			"		while ( alt < new_recs ) { \n";
 
 
-		out <<
-			"			nfa_bp[nfa_len].state = " << ARR_REF( nfaTargs ) << "[" << CAST("int") <<
-							ARR_REF( nfaOffsets ) << "[" << vCS() << "] + 1 + alt];\n"
-			"			nfa_bp[nfa_len].p = " << P() << ";\n";
 
-		if ( redFsm->bAnyNfaPops ) {
-			out <<
-				"			nfa_bp[nfa_len].popTrans = " << CAST("long") <<
-								ARR_REF( nfaOffsets ) << "[" << vCS() << "] + 1 + alt;\n"
-				"\n"
-				;
-		}
 
-		if ( redFsm->bAnyNfaPushes ) {
-			out <<
-				"			switch ( " << ARR_REF( nfaPushActions ) << "[" << CAST("int") <<
-								ARR_REF( nfaOffsets ) << "[" << vCS() << "] + 1 + alt] ) {\n";
 
-			/* Loop the actions. */
-			for ( GenActionTableMap::Iter redAct = redFsm->actionMap;
-					redAct.lte(); redAct++ )
-			{
-				if ( redAct->numNfaPushRefs > 0 ) {
-					/* Write the entry label. */
-					out << "\t " << CASE( STR( redAct->actListId+1 ) ) << " {\n";
-
-					/* Write each action in the list of action items. */
-					for ( GenActionTable::Iter item = redAct->key; item.lte(); item++ )
-						ACTION( out, item->value, IlOpts( 0, false, false ) );
-
-					out << "\n\t" << CEND() << "}\n";
-				}
-			}
-
-			out <<
-				"			}\n";
-		}
-
-
-		out <<
-			"			nfa_len += 1;\n"
-			"			alt += 1;\n"
-			"		}\n"
-			"	}\n"
-			;
-	}
-}
-
-void Flat::NFA_POP()
-{
-	if ( redFsm->anyNfaStates() ) {
-		out <<
-			"	if ( nfa_len > 0 ) {\n"
-			"		nfa_count += 1;\n"
-			"		nfa_len -= 1;\n"
-			"		" << P() << " = nfa_bp[nfa_len].p;\n"
-			;
-
-		if ( redFsm->bAnyNfaPops ) {
-			NFA_FROM_STATE_ACTION_EXEC();
-
-			out << 
-				"		int _pop_test = 1;\n"
-				"		switch ( " << ARR_REF( nfaPopTrans ) <<
-							"[nfa_bp[nfa_len].popTrans] ) {\n";
-
-
-			/* Loop the actions. */
-			for ( GenActionTableMap::Iter redAct = redFsm->actionMap;
-					redAct.lte(); redAct++ )
-			{
-				if ( redAct->numNfaPopTestRefs > 0 ) {
-					/* Write the entry label. */
-					out << "\t " << CASE( STR( redAct->actListId+1 ) ) << " {\n";
-
-					/* Write each action in the list of action items. */
-					for ( GenActionTable::Iter item = redAct->key; item.lte(); item++ )
-						NFA_CONDITION( out, item->value, item.last() );
-
-					out << CEND() << "\n}\n";
-				}
-			}
-
-			out <<
-				"		}\n";
-
-			out <<
-				"		if ( _pop_test ) {\n"
-				"			" << vCS() << " = nfa_bp[nfa_len].state;\n";
-
-			if ( red->nfaPostPopExpr != 0 ) {
-				out << OPEN_HOST_BLOCK( red->nfaPostPopExpr );
-				INLINE_LIST( out, red->nfaPostPopExpr->inlineList, 0, false, false );
-				out << CLOSE_HOST_BLOCK();
-			}
-
-			out <<
-				"			goto _resume;\n"
-				"		}\n";
-
-			if ( red->nfaPostPopExpr != 0 ) {
-				out <<
-				"			else {\n"
-				"			" << OPEN_HOST_BLOCK( red->nfaPostPopExpr );
-				INLINE_LIST( out, red->nfaPostPopExpr->inlineList, 0, false, false );
-				out << CLOSE_HOST_BLOCK() << "\n"
-				"			}\n";
-			}
-		}
-		else {
-			out <<
-				"		" << vCS() << " = nfa_bp[nfa_len].state;\n";
-
-			if ( red->nfaPostPopExpr != 0 ) {
-				out << OPEN_HOST_BLOCK( red->nfaPostPopExpr );
-				INLINE_LIST( out, red->nfaPostPopExpr->inlineList, 0, false, false );
-				out << CLOSE_HOST_BLOCK();
-			}
-
-			out <<
-				"		goto _resume;\n";
-		}
-
-		out << 
-			"		goto _out;\n"
-			"	}\n";
-	}
-}
-
-void Flat::LOCATE_TRANS()
-{
-	if ( redFsm->classMap == 0 ) {
-		out <<
-			"	_trans = " << CAST("int") << ARR_REF( indexDefaults ) << "[" << vCS() << "]" << ";\n";
-	}
-	else {
-		long lowKey = redFsm->lowKey.getVal();
-		long highKey = redFsm->highKey.getVal();
-
-		bool limitLow = keyOps->eq( lowKey, keyOps->minKey );
-		bool limitHigh = keyOps->eq( highKey, keyOps->maxKey );
-
-		out <<
-			"	_keys = " << OFFSET( ARR_REF( keys ), "(" + vCS() + "<<1)" ) << ";\n"
-			"	_inds = " << OFFSET( ARR_REF( indicies ),
-					ARR_REF( flatIndexOffset ) + "[" + vCS() + "]" ) << ";\n"
-			"\n";
-
-		if ( !limitLow || !limitHigh ) {
-			out << "	if ( ";
-
-			if ( !limitHigh )
-				out << GET_KEY() << " <= " << highKey;
-
-			if ( !limitHigh && !limitLow )
-				out << " && ";
-
-			if ( !limitLow )
-				out << GET_KEY() << " >= " << lowKey;
-
-			out << " )\n	{\n";
-		}
-
-		out <<
-			"       int _ic = " << CAST("int") << ARR_REF( charClass ) << "[" << CAST("int") << GET_KEY() <<
-							" - " << lowKey << "];\n"
-			"		if ( _ic <= " << CAST("int") << DEREF( ARR_REF( keys ), "_keys+1" ) << " && " <<
-						"_ic >= " << CAST("int") << DEREF( ARR_REF( keys ), "_keys" ) << " )\n"
-			"			_trans = " << CAST("int") << DEREF( ARR_REF( indicies ),
-								"_inds + " + CAST("int") + "( _ic - " + CAST("int") +
-								DEREF( ARR_REF( keys ), "_keys" ) + " ) " ) << "; \n"
-			"		else\n"
-			"			_trans = " << CAST("int") << ARR_REF( indexDefaults ) <<
-								"[" << vCS() << "]" << ";\n";
-
-		if ( !limitLow || !limitHigh ) {
-			out <<
-				"	}\n"
-				"	else {\n"
-				"		_trans = " << CAST("int") << ARR_REF( indexDefaults ) << "[" << vCS() << "]" << ";\n"
-				"	}\n"
-				"\n";
-		}
-	}
-
-
-	if ( red->condSpaceList.length() > 0 ) {
-		out <<
-			"	_cond = " << CAST( UINT() ) << ARR_REF( transOffsets ) << "[_trans];\n"
-			"\n";
-
-		out <<
-			"	_cpc = 0;\n";
-
-		out <<
-			"	switch ( " << ARR_REF( transCondSpaces ) << "[_trans] ) {\n"
-			"\n";
-
-		for ( CondSpaceList::Iter csi = red->condSpaceList; csi.lte(); csi++ ) {
-			GenCondSpace *condSpace = csi;
-			if ( condSpace->numTransRefs > 0 ) {
-				out << "	" << CASE( STR(condSpace->condSpaceId) ) << " {\n";
-				for ( GenCondSet::Iter csi = condSpace->condSet; csi.lte(); csi++ ) {
-					out << TABS(2) << "if ( ";
-					CONDITION( out, *csi );
-					Size condValOffset = (1 << csi.pos());
-					out << " ) _cpc += " << condValOffset << ";\n";
-				}
-
-				out << 
-					"	" << CEND() << "}\n";
-			}
-		}
-
-		out << 
-			"	}\n"
-			"	_cond += " << CAST( UINT() ) << "_cpc;\n";
-	}
-	
-	out <<
-		"	goto _match_cond;\n"
-	;
-}
-
-void Flat::GOTO( ostream &ret, int gotoDest, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << vCS() << " = " << gotoDest << "; ";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << "goto _again;";
-	
-	ret << CLOSE_GEN_BLOCK();
-}
-
-void Flat::GOTO_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << vCS() << " = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, 0, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << ";";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-	
-	ret << " goto _again;";
-	
-	ret << CLOSE_GEN_BLOCK();
-}
-
-void Flat::CURS( ostream &ret, bool inFinish )
-{
-	ret << OPEN_GEN_EXPR() << "_ps" << CLOSE_GEN_EXPR();
-}
-
-void Flat::TARGS( ostream &ret, bool inFinish, int targState )
-{
-	ret << OPEN_GEN_EXPR() << vCS() << CLOSE_GEN_EXPR();
-}
-
-void Flat::NEXT( ostream &ret, int nextDest, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << vCS() << " = " << nextDest << ";" << CLOSE_GEN_BLOCK();
-}
-
-void Flat::NEXT_EXPR( ostream &ret, GenInlineItem *ilItem, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << "" << vCS() << " = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, 0, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << ";" << CLOSE_GEN_BLOCK();
-}
-
-void Flat::CALL( ostream &ret, int callDest, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " << vCS() << "; " << TOP() << " += 1;" << vCS() << " = " << 
-			callDest << ";";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << " goto _again;";
-
-	ret << CLOSE_GEN_BLOCK();
-}
-
-
-void Flat::NCALL( ostream &ret, int callDest, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " << vCS() << "; " <<
-			TOP() << " += 1;" << vCS() << " = " << 
-			callDest << "; " << CLOSE_GEN_BLOCK();
-}
-
-
-void Flat::CALL_EXPR( ostream &ret, GenInlineItem *ilItem, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " << vCS() << "; " <<
-			TOP() << " += 1;" << vCS() << " = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, targState, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << ";";
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << "goto _again;";
-
-	ret << CLOSE_GEN_BLOCK();
-}
-
-
-void Flat::NCALL_EXPR( ostream &ret, GenInlineItem *ilItem, int targState, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK();
-
-	if ( red->prePushExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->prePushExpr );
-		INLINE_LIST( ret, red->prePushExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	ret << STACK() << "[" << TOP() << "] = " << vCS() << "; " << TOP() << " += 1;" << vCS() <<
-			" = " << OPEN_HOST_EXPR();
-	INLINE_LIST( ret, ilItem->children, targState, inFinish, false );
-	ret << CLOSE_HOST_EXPR() << "; " << CLOSE_GEN_BLOCK();
-}
-
-
-void Flat::RET( ostream &ret, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << TOP() << " -= 1;" << vCS() << " = " << STACK() << "[" << TOP() << "];";
-
-	if ( red->postPopExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->postPopExpr );
-		INLINE_LIST( ret, red->postPopExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	if ( inFinish && !noEnd )
-		EOF_CHECK( ret );
-
-	ret << "goto _again;" << CLOSE_GEN_BLOCK();
-}
-
-void Flat::NRET( ostream &ret, bool inFinish )
-{
-	ret << OPEN_GEN_BLOCK() << TOP() << " -= 1;" << vCS() << " = " << STACK() << "[" << TOP() << "];";
-
-	if ( red->postPopExpr != 0 ) {
-		ret << OPEN_HOST_BLOCK( red->postPopExpr );
-		INLINE_LIST( ret, red->postPopExpr->inlineList, 0, false, false );
-		ret << CLOSE_HOST_BLOCK();
-	}
-
-	/* FIXME: ws in front of } will cause rlhc failure. */
-	ret << CLOSE_GEN_BLOCK();
-}
-
-void Flat::BREAK( ostream &ret, int targState, bool csForced )
-{
-	outLabelUsed = true;
-	ret << OPEN_GEN_BLOCK() << P() << " += 1; " << "goto _out; " << CLOSE_GEN_BLOCK();
-}
-
-void Flat::NBREAK( ostream &ret, int targState, bool csForced )
-{
-	outLabelUsed = true;
-	ret << OPEN_GEN_BLOCK() << P() << " += 1; " << " _nbreak = 1; " << CLOSE_GEN_BLOCK();
-}

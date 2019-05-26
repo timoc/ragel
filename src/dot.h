@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2007 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -59,6 +59,7 @@ public:
 	void action( ActionTable *actionTable );
 	void transAction( StateAp *fromState, TransData *trans );
 	void key( Key key );
+	void condSpec( CondSpace *condSpace, long condVals );
 	void onChar( Key lowKey, Key highKey, CondSpace *condSpace, long condVals );
 	void transList( StateAp *state );
 	void write();

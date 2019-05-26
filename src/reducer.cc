@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Adrian Thurston <thurston@colm.net>
+ * Copyright 2015-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -29,7 +29,6 @@
 
 using std::endl;
 using std::ifstream;
-extern colm_sections rlparse_object;
 
 void TopLevel::loadMachineName( string data )
 {
@@ -209,8 +208,9 @@ void TopLevel::reduceFile( const char *cmd, const char *inputFileName )
 	const char *prevCurFileName = curFileName;
 	curFileName = inputFileName;
 
-	colm_program *program = colm_new_program( &rlparse_object );
+	colm_program *program = colm_new_program( frontendSections );
 	colm_set_debug( program, 0 );
+	colm_set_reduce_clean( program, 0 );
 	colm_set_reduce_ctx( program, this );
 	colm_run_program( program, baseN + id->includePaths.length(), argv );
 	id->streamFileNames.append( colm_extract_fns( program ) );
@@ -228,28 +228,3 @@ void TopLevel::reduceFile( const char *cmd, const char *inputFileName )
 
 	delete[] argv;
 }
-
-void LangDesc::reduceFile( const char *cmd, const char *inputFileName )
-{
-	const char *argv[3];
-	argv[0] = cmd;
-	argv[1] = inputFileName;
-	argv[2] = 0;
-
-	colm_program *program = colm_new_program( &rlparse_object );
-	colm_set_debug( program, 0 );
-	colm_set_reduce_ctx( program, this );
-	colm_run_program( program, 2, argv );
-
-	int length = 0;
-	const char *err = colm_error( program, &length );
-	if ( err != 0 ) {
-		std::cout << "error" << std::endl;
-//		id->error_plain() << string( err, length ) << std::endl;
-	}
-
-	colm_delete_program( program );
-}
-
-
-

@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2006 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -51,9 +51,10 @@ struct SectionPass;
 
 struct TopLevel
 {
-	TopLevel( InputData *id, const HostLang *hostLang,
+	TopLevel( struct colm_sections *frontendSections, InputData *id, const HostLang *hostLang,
 			MinimizeLevel minimizeLevel, MinimizeOpt minimizeOpt )
 	:
+		frontendSections(frontendSections),
 		id(id),
 		section(0),
 		pd(0),
@@ -74,6 +75,7 @@ struct TopLevel
 		exportContext.append( false );
 	}
 
+	struct colm_sections *frontendSections;
 	InputData *id;
 	Section *section;
 	SectionPass *sectionPass;
@@ -113,13 +115,6 @@ struct TopLevel
 	void importFile( std::string fileName );
 
 	bool isImport;
-};
-
-struct LangDesc
-{
-	void reduceFile( const char *cmd, const char *inputFileName );
-	void commit_reduce_forward( program_t *prg, tree_t **root,
-			struct pda_run *pda_run, parse_tree_t *pt );
 };
 
 #endif

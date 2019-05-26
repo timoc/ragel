@@ -52,11 +52,9 @@ struct include_history_item
 	SectionName: str
 end
 
-global IncludeHistory: list<include_history_item> = new list<include_history_item>()
-
-bool isDuplicateInclude( FileName: str, SectionName: str )
+bool isDuplicateInclude( From: machine, FileName: str, SectionName: str )
 {
-	for Item: include_history_item in IncludeHistory {
+	for Item: include_history_item in From->IncludeHistory {
 		if Item->FileName == FileName && Item->SectionName == SectionName {
 			return true
 		}
@@ -64,17 +62,18 @@ bool isDuplicateInclude( FileName: str, SectionName: str )
 	return false
 }
 
-void addIncludeItem( FileName: str, SectionName: str )
+void addIncludeItem( From: machine, FileName: str, SectionName: str )
 {
 	new Item: include_history_item()
 	Item->FileName = FileName
 	Item->SectionName = SectionName
-	IncludeHistory->push_tail( Item )
+	From->IncludeHistory->push_tail( Item )
 }
 
 struct machine
 	Name: str
 	ActionParams: map<str, str>
+	IncludeHistory: list<include_history_item>
 end
 
 
@@ -166,9 +165,7 @@ namespace consume
 
 		token open  /'{'/ -ni
 		token close ni- /'}'/
-
 		token c_any / any /
-
 	end
 
 
@@ -201,6 +198,74 @@ namespace state_ref
 	def state_ref_names
 		[state_ref_names `:: word] :Rec
 	|	[word] :Base
+end
+
+namespace inline
+
+	def inline_expr
+		[expr_item_list] :List
+
+	def expr_item_list
+		[expr_item_list expr_item] :Rec
+	|	[] :Empty
+
+	def expr_item
+		[expr_any] :ExprAny
+	|	[expr_symbol] :ExprSymbol
+	|	[expr_interpret] :ExprInterpret
+
+	def expr_any
+		[whitespace] :WS
+	|	[comment] :Comment
+	|	[string] :String
+	|	[number] :Number
+	|	[hex_number] :Hex
+	|	[ident] :Ident
+	|	[c_any] :Any
+
+	def expr_symbol
+		[`,] :Comma | [`(] :Open | [`)] :Close | [`*] :Star | [`::] :DoubleColon
+
+	def expr_interpret
+		[`fpc] :Fpc
+	|	[`fc] :Fc
+	|	[`fcurs] :Fcurs
+	|	[`ftargs]  :Ftargs
+	|	[`fentry `( state_ref::state_ref state_ref::`)] :Fentry
+	|	[var_ref] :VarRef
+
+	def inline_block
+		[block_item_list] :List
+	
+	def block_item_list
+		[block_item block_item_list] :Rec
+	|	[] :Base
+	
+	def block_item
+		[expr_any] :ExprAny
+	|	[block_symbol] :BlockSymbol
+	|	[block_interpret] :BlockInterpret
+	|	[`{ inline_block `}] :RecBlock
+
+	def block_symbol
+		[`,] :B1 | [`;] :B2 | [`(] :B3 | [`)] :B4 | [`*] :B5 | [`::] :B6
+
+	def block_interpret
+		[expr_interpret] :ExprInterpret
+	|	[`fhold whitespace? `;] :Fhold
+	|	[`fgoto whitespace? `* inline_expr `;] :FgotoExpr
+	|	[`fnext whitespace? `* inline_expr `;] :FnextExpr
+	|	[`fcall whitespace? `* inline_expr `;] :FcallExpr
+	|	[`fncall whitespace? `* inline_expr `;] :FncallExpr
+	|	[`fexec inline_expr `;] :Fexec
+	|	[`fgoto state_ref::state_ref state_ref::`;] :FgotoSr
+	|	[`fnext state_ref::state_ref state_ref::`;] :FnextSr
+	|	[`fcall state_ref::state_ref state_ref::`;] :FcallSr
+	|	[`fncall state_ref::state_ref state_ref::`;] :FncallSr
+	|	[`fret `;] :Fret
+	|	[`fnret `;] :Fnret
+	|	[`fbreak `;] :Fbreak
+	|	[`fnbreak `;] :Fnbreak
 end
 
 namespace ragel
@@ -239,7 +304,7 @@ namespace ragel
 				input->pull( match_length )
 
 				# Parse the include details, up to the the ';' and stop there.
-				parse_stop Spec: include_spec[input]
+				parse_stop Spec: include_spec(input)[]
 
 				Fn: str
 				Machine: str
@@ -264,7 +329,7 @@ namespace ragel
 				input->pull( match_length )
 
 				# Parse the import details, up to the the ';' and stop there.
-				parse_stop Spec: import_spec[input]
+				parse_stop Spec: import_spec(input)[]
 
 				Fn: str
 				if Spec.string
@@ -284,7 +349,9 @@ namespace ragel
 				`access `write `getkey `export `prepush
 				`postpop `nfaprepush `nfapostpop
 
-		literal `:nfa `:cond `:condplus `:condstar `):
+		literal `:nfa `:nfa_greedy `:nfa_lazy `:nfa_wrap 
+			`:nfa_wrap_greedy `:nfa_wrap_lazy
+			`:cond `:condplus `:condstar `):
 
 		token string /
 			'"' ( [^"\\] | '\\' any )* '"' 'i'? |
@@ -385,6 +452,7 @@ namespace ragel
 				Machine = new machine()
 				Machine->Name = Name
 				Machine->ActionParams = new map<str, str>()
+				Machine->IncludeHistory = new list<include_history_item>()
 				GblMachineMap->insert( Machine->Name, Machine )
 			}
 
@@ -573,7 +641,14 @@ namespace ragel
 	|	[] :Empty
 
 	def nfastar
-		[`:nfa]
+		[`:nfa]        :Default
+	|	[`:nfa_lazy]   :Lazy
+	|	[`:nfa_greedy] :Greedy
+
+	def nfawrap
+		[`:nfa_wrap]   :Default
+	|	[`:nfa_wrap_lazy]   :Lazy
+	|	[`:nfa_wrap_greedy] :Greedy
 
 	def colon_cond
 		[`:cond] :Cond
@@ -592,6 +667,9 @@ namespace ragel
 	|	[nfastar  `( expression `,
 			Push: action_ref `, Pop: action_ref `, Init: action_ref `, Stay: action_ref `,
 			Repeat: action_ref `, Exit: action_ref `):] :Nfa
+	|	[nfawrap  `( expression `,
+			Push: action_ref `, Pop: action_ref `, Init: action_ref `, Stay: action_ref `,
+			Exit: action_ref `):] :NfaWrap
 	|	[colon_cond `( expression `, 
 			Init: action_ref `, Inc: action_ref `, Min: action_ref OptMax: opt_max_arg `):] :Cond
 	|	[`( join `)] :Join
@@ -650,6 +728,7 @@ namespace ragel
 	def lm
 		[join] :Join
 	|	[`|* lm_stmt_list `*|] :Lm
+	|	[`:nfa `|* lm_stmt_list `*|] :LmNfa
 
 	#
 	# Actions
@@ -809,6 +888,15 @@ namespace path
 	}
 end
 
+namespace host
+	def section
+		[`%%{ ragel::opt_machine_name ragel::ign_want ragel::statement* ragel::`}%%] :MultiLine
+	|	[`%%{ ragel::opt_machine_name ragel::ign_ignore consume::tok* consume::`}%%] :Consume
+	|	[tok] :Token
+end
+
+def start
+	[SectionList: host::section*]
 
 list<str> makeIncludePathChecks( CurFileName: str, IncFileName: str )
 {
@@ -878,10 +966,10 @@ stream ragelInclude( IncFileName: str, Machine: str )
 	if !Machine
 		Machine = GblCurMachine->Name
 
-	if isDuplicateInclude( IncFileName, Machine )
+	if isDuplicateInclude( GblCurMachine, IncFileName, Machine )
 		return nil
 
-	addIncludeItem( IncFileName, Machine )
+	addIncludeItem( GblCurMachine, IncFileName, Machine )
 
 	saveGlobals()
 

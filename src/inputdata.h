@@ -1,5 +1,5 @@
 /*
- * Copyright 2008 Adrian Thurston <thurston@colm.net>
+ * Copyright 2008-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -34,6 +34,7 @@ struct CondSpace;
 struct CondAp;
 struct ActionTable;
 struct Section;
+struct LangFuncs;
 
 void translatedHostData( ostream &out, const string &data );
 
@@ -169,19 +170,20 @@ struct InputData
 :
 	public FsmGbl
 {
-	InputData()
+	InputData( const HostLang *hostLang,
+			struct colm_sections *frontendSections, struct colm_sections *rlhcSections )
 	: 
+		FsmGbl(hostLang),
+		frontendSections(frontendSections),
+		rlhcSections(rlhcSections),
 		inputFileName(0),
 		outputFileName(0),
-		commFileName(0),
-		langDescFileName(0),
 		nextMachineId(0),
 		inStream(0),
 		outStream(0),
 		outFilter(0),
 		curItem(0),
 		lastFlush(0),
-		hostLang(&hostLangC),
 		codeStyle(GenBinaryLoop),
 		dotGenPd(0),
 		machineSpec(0),
@@ -190,7 +192,7 @@ struct InputData
 		noLineDirectives(false),
 		maxTransitions(LONG_MAX),
 		numSplitPartitions(0),
-		rubyImpl(MRI),
+		rlhc(false),
 		rlhcShowCmd(false),
 		noIntermediate(false),
 		frontendSpecified(false),
@@ -205,27 +207,23 @@ struct InputData
 		histogramFn(0),
 		histogram(0),
 		input(0),
-		forceLibRagel(false),
-		postfix(false)
+		forceVar(false)
 	{}
 
 	~InputData();
 
 	void usage();
 	void version();
-	void showHostLangNames();
-	void showHostLangArgs();
 	void showFrontends();
 	void showBackends();
-	void showStyles();
 
+	struct colm_sections *frontendSections;
+	struct colm_sections *rlhcSections;
 	std::string dirName;
 
 	/* The name of the root section, this does not change during an include. */
 	const char *inputFileName;
 	const char *outputFileName;
-	const char *commFileName;
-	const char *langDescFileName;
 
 	string comm;
 
@@ -244,8 +242,6 @@ struct InputData
 	InputItemList inputItems;
 	InputItem *curItem;
 	InputItem *lastFlush;
-
-	const HostLang *hostLang;
 
 	/* Ragel-6 frontend. */
 	ParserDict parserDict;
@@ -274,9 +270,7 @@ struct InputData
 	long maxTransitions;
 	int numSplitPartitions;
 
-	/* Target ruby impl */
-	RubyImplEnum rubyImpl;
-
+	bool rlhc;
 	bool rlhcShowCmd;
 	bool noIntermediate;
 
@@ -302,8 +296,7 @@ struct InputData
 
 	Vector<const char**> streamFileNames;
 
-	bool forceLibRagel;
-	bool postfix;
+	bool forceVar;
 
 	void verifyWriteHasData( InputItem *ii );
 	void verifyWritesHaveData();
@@ -319,18 +312,6 @@ struct InputData
 	void generateReduced();
 	void prepareSingleMachine();
 	void prepareAllMachines();
-
-	void cdDefaultFileName( const char *inputFile );
-	void goDefaultFileName( const char *inputFile );
-	void javaDefaultFileName( const char *inputFile );
-	void rubyDefaultFileName( const char *inputFile );
-	void csharpDefaultFileName( const char *inputFile );
-	void ocamlDefaultFileName( const char *inputFile );
-	void crackDefaultFileName( const char *inputFile );
-	void asmDefaultFileName( const char *inputFile );
-	void rustDefaultFileName( const char *inputFile );
-	void juliaDefaultFileName( const char *inputFile );
-	void jsDefaultFileName( const char *inputFile );
 
 	void writeOutput( InputItem *ii );
 	void writeLanguage( std::ostream &out );
@@ -361,6 +342,12 @@ struct InputData
 
 	const char **makeIncludePathChecks( const char *curFileName, const char *fileName );
 	std::ifstream *tryOpenInclude( const char **pathChecks, long &found );
+	int main( int argc, const char **argv );
+
+	void wait( const char *what, pid_t pid );
+
+	int rlhcRun( int argc, const char **argv );
+	int rlhcMain( int argc, const char **argv );
 };
 
 

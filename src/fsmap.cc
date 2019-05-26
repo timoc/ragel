@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2004 Adrian Thurston <thurston@colm.net>
+ * Copyright 2002-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -1118,8 +1118,13 @@ int FsmAp::compareStateData( const StateAp *state1, const StateAp *state2 )
 		return cmpRes;
 
 	/* Test eof action tables. */
-	return CmpActionTable::compare( state1->eofActionTable, 
+	cmpRes = CmpActionTable::compare( state1->eofActionTable, 
 			state2->eofActionTable );
+	if ( cmpRes != 0 )
+		return cmpRes;
+	
+	return CmpTable<LongestMatchPart*>::compare(
+			state1->lmNfaParts, state2->lmNfaParts );
 }
 
 
@@ -1128,9 +1133,9 @@ int FsmAp::compareStateData( const StateAp *state1, const StateAp *state2 )
 void FsmAp::clearOutData( StateAp *state )
 {
 	/* Kill the out actions and priorities. */
-	state->outActionTable.empty();
 	state->outCondSpace = 0;
 	state->outCondKeys.empty();
+	state->outActionTable.empty();
 	state->outPriorTable.empty();
 }
 

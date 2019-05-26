@@ -1,3 +1,70 @@
+Ragel 7.0.1 - Aug XXX, 2018
+===========================
+ -Condition implemenation rewritten. Previously utilized an extension of the
+  alphabet space to encode "character when A". The character was looked up, the
+  applicable condition set determined, a constant value was added to the
+  character value, then the real transition looked up. Now a more natural
+  implemation has the transition encoded in two levels of lists. The first
+  level is indexed by the alphabet character, which is unmodified. This tells
+  us which condition set to execute. The result of the condition execution is
+  an integer that is looked up in a second level list. This new condition
+  implementation allows for a much less complicated implemation, and does not
+  rely on available bits in the alphabet space.
+ -Conditions now properly execution on EOF.
+ -Added a Condition-based repetition operator.
+ -Ragel frontend is now colm-based. The grammar is separated into a core ragel
+  grammar that can then be extended for different host languages.
+ -Intermediate codegen language was added and non-C/ASM code generators are now
+  based on the intermediate language. Separate ragel executable files are used
+  to implement the different host languages.
+ -Restrictions on action-based jumping to and calling of state machines in
+  languages where it cannot be implemented properly (no goto in host language).
+  These statements must be replaced with the "next" version, which does not
+  jump out of the action, but instead causes the jump/call after the action
+  list.
+ -Added NFA features. This includes repetition and support for large unions of
+  expressions. The operator can create a deterministic prefix, the depth of
+  which is configurable, before NFA alternation begins.
+ -Consolodating code in the different code generation styles.
+
+Ragel 6.10 - Mar 24, 2017
+=========================
+ -C codegen: test P vs PE in goto/call/ret statements in EOF actions, just
+  before re-entering. If at the end of the input block then the EOF check is
+  jumped to. This change prevents overrunning the buffer if control flow is
+  issued in an EOF action without fixing the input pointer first. If a program
+  properly issues an fhold before the control flow the program won't be
+  affected.
+ -Updated action label generation. The previous set of conditions for
+  generating the label didn't cover actions coming from the eofAction pointer
+  (eof trans covered since it points into the set of transitions).
+ -Use separate signed/unsigned values for host type min/max. Using separate
+  values avoids the need to type cast before the data goes into FsmCtx structs.
+  Keep it in native types until it is used.
+ -Optionally do not generate entry point variables. Adds noentry write option
+  for data.
+ -Various warning elimination and build updates.
+
+Ragel 6.9 - Oct 13, 2014
+========================
+ -updated command-line synopsis
+ -ocaml: fix missing semicolon
+ -ocaml: support -G1
+ -ocaml: choose a unique name for type state
+ -ruby: reduce the amount of calls to GET_WIDE_KEY()
+ -union test case: warning fix
+ -omit line directives around expression-oriented write statements
+ -use AS_IF and test command to check if the DIST file is present
+ -added missing std:: using
+ -go: added '//line' directive support
+
+Ragel 6.8 - Feb 11, 2013
+========================
+
+ -The -G2 code generator for Go1 was rewritten. Table, flat and switch-based
+  code generators were added. (Anton Ageev)
+ -The CXXFLAGS variable is not longer set in the configure script.
+
 Ragel 6.7 - May 22, 2011
 ========================
  -The C vim file now supports L,l on the end of literal numbers, other syntax

@@ -1,5 +1,5 @@
 /*
- * Copyright 2014-2015 Adrian Thurston <thurston@colm.net>
+ * Copyright 2014-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -45,7 +45,6 @@ using std::cin;
 using std::endl;
 
 extern int numSplitPartitions;
-extern bool noLineDirectives;
 bool printStatistics = false;
 
 /* Enables transition logging in the form that score-based state sorting can
@@ -55,10 +54,6 @@ bool printStatistics = false;
 
 void asmLineDirective( ostream &out, const char *fileName, int line )
 {
-#if 0
-	if ( noLineDirectives )
-		out << "/* ";
-
 	/* Write the preprocessor line info for to the input file. */
 	out << "#line " << line  << " \"";
 	for ( const char *pc = fileName; *pc != 0; pc++ ) {
@@ -69,11 +64,7 @@ void asmLineDirective( ostream &out, const char *fileName, int line )
 	}
 	out << '"';
 
-	if ( noLineDirectives )
-		out << " */";
-
 	out << '\n';
-#endif
 }
 
 /* Init code gen with in parameters. */
@@ -106,13 +97,6 @@ void AsmCodeGen::genAnalysis()
 	 * things. We will use these in reporting the usage of fsm directives in
 	 * action code. */
 	red->analyzeMachine();
-}
-
-void AsmCodeGen::genLineDirective( ostream &out )
-{
-	std::streambuf *sbuf = out.rdbuf();
-	output_filter *filter = static_cast<output_filter*>(sbuf);
-	asmLineDirective( out, filter->fileName, filter->line + 1 );
 }
 
 /* Write out the fsm name. */
@@ -279,16 +263,6 @@ string AsmCodeGen::GET_KEY()
 		ret << "(" << P() << ")";
 	}
 	return ret.str();
-}
-
-/* Write out level number of tabs. Makes the nested binary search nice
- * looking. */
-string AsmCodeGen::TABS( int level )
-{
-	string result;
-	while ( level-- > 0 )
-		result += "\t";
-	return result;
 }
 
 string AsmCodeGen::COND_KEY( CondKey key )
@@ -475,7 +449,7 @@ void AsmCodeGen::NBREAK( ostream &ret, int targState, bool csForced )
 
 	ret <<
 		"	movb	$1, " << NBREAK() << "\n"
-		"	jmp		" << LABEL( "out" ) << "\n";
+		"	jmp		" << LABEL( "pop" ) << "\n";
 }
 
 /* Write out an inline tree structure. Walks the list and possibly calls out
@@ -579,6 +553,10 @@ void AsmCodeGen::INLINE_LIST( ostream &ret, GenInlineList *inlineList,
 			ret <<
 				"	subq	$1, " << P() << "\n";
 			break;
+		case GenInlineItem::NfaClear:
+			ret <<
+				"	movq	$0, " << NFA_TOP() << "\n";
+			break;
 
 		case GenInlineItem::HostStmt:
 			HOST_STMT( ret, item, targState, inFinish, csForced );
@@ -674,14 +652,14 @@ void AsmCodeGen::NFA_CONDITION( ostream &ret, GenAction *condition, bool last )
 		}
 
 		out <<
-			"	jmp	" << LABEL( "out" ) << "\n"
+			"	jmp	" << LABEL( "pop_fail" ) << "\n"
 			"102:\n";
 	}
 	else {
 		CONDITION( ret, condition );
 		out <<
 			"	test	%eax, %eax\n"
-			"	jz		" << LABEL( "out" ) << "\n";
+			"	jz		" << LABEL( "pop_fail" ) << "\n";
 	}
 }
 
@@ -946,7 +924,7 @@ void AsmCodeGen::emitSingleJumpTable( RedStateAp *state, string def )
 }
 
 
-void AsmCodeGen::emitRangeBSearch( RedStateAp *state, int level, int low, int high )
+void AsmCodeGen::emitRangeBSearch( RedStateAp *state, int low, int high )
 {
 	static int nl = 1;
 
@@ -978,7 +956,7 @@ void AsmCodeGen::emitRangeBSearch( RedStateAp *state, int level, int low, int hi
 			"	jge	" << LABEL( "nl", l1 ) << "\n";
 			
 		
-		emitRangeBSearch( state, level+1, low, mid-1 );
+		emitRangeBSearch( state, low, mid-1 );
 
 		out <<
 			LABEL( "nl", l1 ) << ":\n";
@@ -991,7 +969,7 @@ void AsmCodeGen::emitRangeBSearch( RedStateAp *state, int level, int low, int hi
 		out <<
 			"	jle	" << targ << "\n";
 
-		emitRangeBSearch( state, level+1, mid+1, high );
+		emitRangeBSearch( state, mid+1, high );
 	}
 	else if ( anyLower && !anyHigher ) {
 
@@ -1007,7 +985,7 @@ void AsmCodeGen::emitRangeBSearch( RedStateAp *state, int level, int low, int hi
 			"	cmpb	" << KEY( data[mid].lowKey ) << ", %r10b\n"
 			"	jge	" << targ << "\n";
 
-		emitRangeBSearch( state, level+1, low, mid-1 );
+		emitRangeBSearch( state, low, mid-1 );
 
 		/* If the higher is the highest in the alphabet then there is no sense
 		 * testing it. */
@@ -1040,7 +1018,7 @@ void AsmCodeGen::emitRangeBSearch( RedStateAp *state, int level, int low, int hi
 			"	cmpb	" << KEY( data[mid].highKey ) << ", %r10b\n"
 			"	jle	" << targ << "\n";
 
-		emitRangeBSearch( state, level+1, mid+1, high );
+		emitRangeBSearch( state, mid+1, high );
 
 		/* If the lower end is the lowest in the alphabet then there is no
 		 * sense testing it. */
@@ -1565,7 +1543,7 @@ bool AsmCodeGen::IN_TRANS_ACTIONS( RedStateAp *state )
 			if ( redFsm->anyRegNbreak() ) {
 				out <<
 					"	cmpb	$0, " << NBREAK() << "\n"
-					"	jne		" << LABEL( "out" ) << "\n";
+					"	jne		" << LABEL( "pop" ) << "\n";
 				outLabelUsed = true;
 			}
 				
@@ -1588,6 +1566,32 @@ void AsmCodeGen::GOTO_HEADER( RedStateAp *state )
 
 	if ( state->labelNeeded ) 
 		out << LABEL( "st", state->id ) << ":\n";
+
+	/* need to do this if the transition is an eof transition, or if the action
+	 * contains fexec. Otherwise, no need. */
+	if ( redFsm->anyEofActivity() ) {
+		out <<
+			"	cmpq	" << P() << ", " << vEOF() << "\n"
+			"	jne		" << LABEL( "skip", state->id ) << "\n";
+
+		if ( state->isFinal ) {
+			out <<
+//				"	cmpq	" << vCS() << ", " << FIRST_FINAL_STATE() << "\n"
+				"	jmp		" << LABEL( "out" ) << "\n";
+		}
+
+		out << 
+			"	jmp		" << LABEL( "pop" ) << "\n" <<
+			LABEL( "skip", state->id ) << ":\n";
+
+//		out << "	if ( " << P() << " == " << vEOF() << " ) {\n"
+//			"			if ( " << vCS() << " >= " << FIRST_FINAL_STATE() << " )\n"
+//			"				goto _out;\n"
+//			"			else\n"
+//			"				goto _pop;\n"
+//			"		}\n";
+//		outLabelUsed = true;
+	}
 
 	if ( state->toStateAction != 0 ) {
 		/* Remember that we wrote an action. Write every action in the list. */
@@ -1647,7 +1651,7 @@ void AsmCodeGen::STATE_GOTO_ERROR()
 
 	out << 
 		"	movq	$" << state->id << ", " << vCS() << "\n"
-		"	jmp		" << LABEL( "out" ) << "\n";
+		"	jmp		" << LABEL( "pop" ) << "\n";
 }
 
 std::string AsmCodeGen::TRANS_GOTO_TARG( RedCondPair *pair )
@@ -1749,52 +1753,30 @@ std::ostream &AsmCodeGen::ENTRY_CASES()
 std::ostream &AsmCodeGen::FINISH_CASES()
 {
 	/* The current state is in %rax. */
-	long done = nextLmSwitchLabel++;
-
-	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
-		if ( st->eofAction != 0 ) {
-			if ( st->eofAction->eofRefs == 0 )
-				st->eofAction->eofRefs = new IntSet;
-			st->eofAction->eofRefs->insert( st->id );
-		}
-	}
+	/*long done = */ nextLmSwitchLabel++;
 
 	for ( RedStateList::Iter st = redFsm->stateList; st.lte(); st++ ) {
 		if ( st->eofTrans != 0 ) {
-			long l = nextLmSwitchLabel++;
-			
 			out <<
 				"	cmpq	$" << st->id << ", %rax\n"
-				"	jne		" << LABEL( "finish_next", l ) << "\n"
-				"	jmp		" << TRANS_GOTO_TARG( st->eofTrans ) << "\n"
-				"" << LABEL( "finish_next", l ) << ":\n";
-		}
-	}
+				"	jne		" << LABEL( "fc", st->id ) << "\n";
 
-
-	for ( GenActionTableMap::Iter act = redFsm->actionMap; act.lte(); act++ ) {
-		if ( act->eofRefs != 0 ) {
-			for ( IntSet::Iter pst = *act->eofRefs; pst.lte(); pst++ ) {
-				long l = nextLmSwitchLabel++;
-				out <<
-					"	# eof ref case\n"
-					"	cmpq	$" << *pst << ", %rax\n"
-					"	jne		" << LABEL( "finish_next", l ) << "\n";
-
-				/* Write each action in the eof action list. */
-				for ( GenActionTable::Iter item = act->key; item.lte(); item++ )
-					ACTION( out, item->value, STATE_ERR_STATE, true, false );
-
-				out <<
-					"	jmp		" << LABEL( "finish_done", done ) << "\n"
-					"" << LABEL( "finish_next", l ) << ":\n";
+			if ( st->fromStateAction != 0 ) {
+				/* Remember that we wrote an action. Write every action in the list. */
+				for ( GenActionTable::Iter item = st->fromStateAction->key;
+						item.lte(); item++ )
+				{
+					ACTION( out, item->value, st->id, false,
+							st->fromStateAction->anyNextStmt() );
+					out << "\n";
+				}
 			}
+				
+			out <<
+				"	jmp		" << TRANS_GOTO_TARG( st->eofTrans ) << "\n" <<
+				LABEL( "fc", st->id ) << ":\n";
 		}
 	}
-
-
-	out << 
-		"" << LABEL( "finish_done", done ) << ":\n";
 
 	return out;
 }
@@ -1918,7 +1900,7 @@ void AsmCodeGen::writeExec()
 	/* If there are eof actions then we need to run code after exporting the
 	 * final state to vCS. Since the interface register is calee-save, we need
 	 * it to live on the stack. */
-	stackCS = redFsm->anyEofActions();
+	stackCS = redFsm->anyEofActivity();
 
 	/*
 	 * This code needs 88 bytes of stack (offset 0 from %rbp).
@@ -2006,7 +1988,7 @@ void AsmCodeGen::writeExec()
 	if ( testEofUsed )
 		out << LABEL( "test_eof" ) << ":\n";
 
-	if ( redFsm->anyEofTrans() || redFsm->anyEofActions() ) {
+	if ( redFsm->anyEofActivity() ) {
 		out <<
 			"	cmpq	" << P() << ", " << vEOF() << "\n"
 			"	jne		" << LABEL( "eof_trans" ) << "\n"
@@ -2015,15 +1997,18 @@ void AsmCodeGen::writeExec()
 			"" << LABEL( "eof_trans" ) << ":\n";
 	}
 
+	out <<
+		"	cmpq	$" << FIRST_FINAL_STATE() << ", " << vCS() << "\n"
+		"	jge		" << LABEL( "out" ) << "\n";
 
-	if ( outLabelUsed )
-		out << LABEL( "out" ) << ":\n";
+	// if ( outLabelUsed )
+	out << LABEL( "pop" ) << ":\n";
 
 	if ( redFsm->anyNfaStates() ) {
 		out <<
 			"	movq    " << NFA_TOP() << ", %rcx\n"
 			"	cmpq	$0, %rcx\n"
-			"	je		" << LABEL( "no_alt" ) << "\n"
+			"	je		" << LABEL( "nfa_stack_empty" ) << "\n"
 			"	movq    " << NFA_TOP() << ", %rcx\n"
 			"	subq	$1, %rcx\n"
 			"	movq	%rcx, " << NFA_TOP() << "\n"
@@ -2032,7 +2017,6 @@ void AsmCodeGen::writeExec()
 			"	movq    0(%rax,%rcx,), %r11\n"
 			"	movq	8(%rax,%rcx,), " << P() << "\n"
 			"	movq	%r11, " << vCS() << "\n"
-
 			;
 
 		if ( redFsm->bAnyNfaPops ) {
@@ -2070,8 +2054,11 @@ void AsmCodeGen::writeExec()
 		}
 
 		out <<
-			"	jmp		" << LABEL( "resume" ) << "\n"
-			<< LABEL( "no_alt" ) << ":\n";
+			"	jmp		" << LABEL( "resume" ) << "\n" <<
+			LABEL( "pop_fail" ) << ":\n"
+			"	movq	$" << ERROR_STATE() << ", " << vCS() << "\n"
+			"	jmp		" << LABEL( "resume" ) << "\n" <<
+			LABEL( "nfa_stack_empty" ) << ":\n";
 	}
 
 	if ( stackCS ) {
@@ -2081,6 +2068,13 @@ void AsmCodeGen::writeExec()
 
 	out <<
 		"# WRITE EXEC END\n";
+
+	out << LABEL( "out" ) << ":\n";
+
+	if ( stackCS ) {
+		out <<
+			"	movq	" << vCS() << ", %r11\n";
+	}
 
 #ifdef LOG_TRANS
 	out <<

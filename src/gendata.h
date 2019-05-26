@@ -1,5 +1,5 @@
 /*
- * Copyright 2005-2007 Adrian Thurston <thurston@colm.net>
+ * Copyright 2005-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -211,8 +211,11 @@ protected:
 	void makeLmOnLast( GenInlineList *outList, InlineItem *item );
 	void makeLmOnNext( GenInlineList *outList, InlineItem *item );
 	void makeLmOnLagBehind( GenInlineList *outList, InlineItem *item );
-	void makeActionExec( GenInlineList *outList, InlineItem *item );
 	void makeLmSwitch( GenInlineList *outList, InlineItem *item );
+	void makeLmNfaOnLast( GenInlineList *outList, InlineItem *item );
+	void makeLmNfaOnNext( GenInlineList *outList, InlineItem *item );
+	void makeLmNfaOnEof( GenInlineList *outList, InlineItem *item );
+	void makeActionExec( GenInlineList *outList, InlineItem *item );
 	void makeSetTokend( GenInlineList *outList, long offset );
 	void makeSetAct( GenInlineList *outList, long lmId );
 	void makeSubList( GenInlineList *outList, InlineList *inlineList, 
@@ -257,6 +260,8 @@ protected:
 	void setStateActions( int snum, long toStateAction, 
 			long fromStateAction, long eofAction );
 	void setEofTrans( int snum, long targ, long eofAction );
+	void setEofTrans( int snum, GenCondSpace *condSpace,
+			RedCondEl *outConds, int numConds, RedCondAp *errCond );
 	void setForcedErrorState()
 		{ redFsm->forcedErrorState = true; }
 
@@ -341,8 +346,10 @@ public:
 
 struct CodeGenArgs
 {
-	CodeGenArgs( FsmGbl *id, Reducer *red, HostType *alphType, int machineId, std::string sourceFileName,
-			std::string fsmName, std::ostream &out, CodeStyle codeStyle )
+	CodeGenArgs( FsmGbl *id, Reducer *red, HostType *alphType,
+			int machineId, std::string sourceFileName,
+			std::string fsmName, std::ostream &out,
+			CodeStyle codeStyle )
 	:
 		id(id),
 		red(red),
@@ -352,7 +359,9 @@ struct CodeGenArgs
 		fsmName(fsmName),
 		out(out),
 		codeStyle(codeStyle),
-		lineDirectives(true)
+		lineDirectives(true),
+		forceVar(false),
+		loopLabels(false)
 	{}
 
 	FsmGbl *id;
@@ -364,6 +373,9 @@ struct CodeGenArgs
 	std::ostream &out;
 	CodeStyle codeStyle;
 	bool lineDirectives;
+	GenLineDirectiveT genLineDirective;
+	bool forceVar;
+	bool loopLabels;
 };
 
 struct CodeGenData
@@ -383,7 +395,9 @@ struct CodeGenData
 		noError(false),
 		noCS(false),
 		lineDirectives(args.lineDirectives),
-		cleared(false)
+		cleared(false),
+		referencesCollected(false),
+		genLineDirective(args.id->hostLang->genLineDirective)
 	{
 	}
 
@@ -423,6 +437,8 @@ struct CodeGenData
 		red->redFsm = 0;
 	}
 
+	void collectReferences();
+
 protected:
 
 	Reducer *red;
@@ -444,10 +460,16 @@ protected:
 
 	bool lineDirectives;
 	bool cleared;
+
+	bool referencesCollected;
+
+	void genOutputLineDirective( std::ostream &out ) const;
+	GenLineDirectiveT genLineDirective;
 };
 
 /* Selects and constructs the codegen based on the output options. */
 CodeGenData *makeCodeGen( const HostLang *hostLang, const CodeGenArgs &args );
+CodeGenData *asm_makeCodeGen( const HostLang *hostLang, const CodeGenArgs &args );
 
 typedef AvlMap<char *, CodeGenData*, CmpStr> CodeGenMap;
 typedef AvlMapEl<char *, CodeGenData*> CodeGenMapEl;

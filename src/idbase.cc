@@ -1,5 +1,5 @@
 /*
- * Copyright 2008-2016 Adrian Thurston <thurston@colm.net>
+ * Copyright 2008-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -260,6 +260,17 @@ void FsmCtx::createNfaActions( FsmAp *fsm )
 				 * condition-like testing. */
 				for ( ActionTable::Iter ati = n->restoreTable; ati.lte(); ati++ ) {
 					n->popTest.setAction( ati->key, ati->value );
+				}
+
+				/* Move pop actions into pop test. Wrap to override the
+				 * condition-like testing. */
+				for ( ActionTable::Iter ati = n->popFrom; ati.lte(); ati++ ) {
+
+					InlineList *il1 = new InlineList;
+					il1->append( new InlineItem( InputLoc(),
+								ati->value, InlineItem::NfaWrapAction ) );
+					Action *wrap = newNfaWrapAction( "action_wrap", il1, ati->value );
+					n->popTest.setAction( ORD_COND2, wrap );
 				}
 
 				/* Move condition evaluation into pop test. Wrap with condition

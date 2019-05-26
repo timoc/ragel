@@ -1,5 +1,5 @@
 /*
- * Copyright 2001-2015 Adrian Thurston <thurston@colm.net>
+ * Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -79,16 +79,8 @@ void GraphvizDotGen::key( Key key )
 	}
 }
 
-
-void GraphvizDotGen::onChar( Key lowKey, Key highKey, CondSpace *condSpace, long condVals )
+void GraphvizDotGen::condSpec( CondSpace *condSpace, long condVals )
 {
-	/* Output the key. Possibly a range. */
-	key( lowKey );
-	if ( keyOps->ne( highKey, lowKey ) ) {
-		out << "..";
-		key( highKey );
-	}
-
 	if ( condSpace != 0 ) {
 		out << "(";
 		for ( CondSet::Iter csi = condSpace->condSet; csi.lte(); csi++ ) {
@@ -101,6 +93,18 @@ void GraphvizDotGen::onChar( Key lowKey, Key highKey, CondSpace *condSpace, long
 		}
 		out << ")";
 	}
+}
+
+void GraphvizDotGen::onChar( Key lowKey, Key highKey, CondSpace *condSpace, long condVals )
+{
+	/* Output the key. Possibly a range. */
+	key( lowKey );
+	if ( keyOps->ne( highKey, lowKey ) ) {
+		out << "..";
+		key( highKey );
+	}
+
+	condSpec( condSpace, condVals );
 }
 
 
@@ -371,6 +375,13 @@ void GraphvizDotGen::write( )
 		if ( st->eofActionTable.length() != 0 ) {
 			out << "	" << st->alg.stateNum << " -> eof_" << 
 					st->alg.stateNum << " [ label = \"EOF"; 
+
+			for ( CondKeySet::Iter i = st->outCondKeys; i.lte(); i++ ) {
+				if ( i.pos() > 0 )
+					out << "|";
+				condSpec( st->outCondSpace, *i );
+			}
+
 			action( &st->eofActionTable );
 			out << "\" ];\n";
 		}

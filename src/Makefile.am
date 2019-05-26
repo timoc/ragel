@@ -1,4 +1,5 @@
-SUBDIRS = host-ruby
+SUBDIRS = . host-ruby host-asm host-julia host-ocaml host-c \
+	host-d host-csharp host-go host-java host-rust host-crack host-js
 
 COLM        = @COLM@
 COLM_LD     = @COLM_LD@
@@ -7,10 +8,13 @@ COLM_BINDEP = @COLM_BINDEP@
 KELBT       = @KELBT@
 RAGEL       = @RAGEL@
 
-# Libfsm contains only the FSM construction code and the backend code
+# libfsm contains only the FSM construction code and the backend code
 # generators. It is useful for building code generators in programs not
 # connected to the ragel language.
-lib_LTLIBRARIES = libfsm.la
+#
+# libragel contains the parse tree and other parsing support code. Everything
+# except the reducers, which are specific to the frontends.
+lib_LTLIBRARIES = libfsm.la libragel.la
 
 if BUILD_PROGRAM
 
@@ -24,51 +28,97 @@ pkginclude_HEADERS = \
 
 nodist_pkginclude_HEADERS = config.h
 
-ragel_CPPFLAGS = -I$(top_srcdir)/aapl -DBINDIR='"@bindir@"'
+data_DATA = ragel.lm
 
-LIBFSM_SRC = \
-	buffer.h codegen.h binary.h bingoto.h bingotoloop.h bingotoexp.h binvar.h \
-	binvarloop.h binvarexp.h flat.h flatgotoloop.h flatgotoexp.h flatvar.h \
-	flatvarloop.h flatvarexp.h goto.h gotoloop.h gotoexp.h \
+#
+# libfsm: state machine construction and direct code generation.
+#
+libfsm_la_CPPFLAGS = -I$(top_srcdir)/aapl
+
+dist_libfsm_la_SOURCES = \
+	buffer.h codegen.h \
+	actloop.h actexp.h \
+	tables.h \
+	binary.h bingoto.h binbreak.h binvar.h \
+	flat.h flatgoto.h flatbreak.h flatvar.h \
+	switch.h switchgoto.h switchbreak.h switchvar.h \
+	goto.h gotoloop.h gotoexp.h \
 	ipgoto.h asm.h \
 	idbase.cc fsmstate.cc fsmbase.cc fsmattach.cc fsmmin.cc fsmgraph.cc \
 	fsmap.cc fsmcond.cc fsmnfa.cc common.cc redfsm.cc gendata.cc \
-	allocgen.cc codegen.cc binary.cc bingotoloop.cc bingotoexp.cc binvar.cc \
-	binvarloop.cc binvarexp.cc flat.cc flatgotoloop.cc flatgotoexp.cc \
-	flatvar.cc flatvarloop.cc flatvarexp.cc goto.cc gotoloop.cc \
-	gotoexp.cc ipgoto.cc dot.cc asm.cc
+	allocgen.cc codegen.cc \
+	actexp.cc binvar.cc \
+	tables.cc tabgoto.cc tabbreak.cc tabvar.cc \
+	binary.cc bingoto.cc binbreak.cc actloop.cc \
+	flat.cc flatgoto.cc flatbreak.cc flatvar.cc \
+	switch.cc switchgoto.cc switchbreak.cc switchvar.cc \
+	goto.cc gotoloop.cc gotoexp.cc ipgoto.cc \
+	dot.cc asm.cc
 
-ragel_SOURCES = \
+nodist_libfsm_la_SOURCES = \
+	version.h
+
+libfsm_la_LDFLAGS = -no-undefined
+
+#
+# libragel: ragel program minus host-specific code
+#
+libragel_la_CPPFLAGS = -I$(top_srcdir)/aapl -DBINDIR='"@bindir@"'
+
+dist_libragel_la_SOURCES = \
 	parsedata.h parsetree.h inputdata.h pcheck.h reducer.h rlscan.h load.h \
-	parsetree.cc parsedata.cc inputdata.cc load.cc reducer.cc main.cc \
-	$(LIBFSM_SRC)
+	parsetree.cc longest.cc parsedata.cc inputdata.cc load.cc reducer.cc
 
-nodist_ragel_SOURCES = version.h
-BUILT_SOURCES = version.h
+libragel_la_LDFLAGS = -no-undefined
+libragel_la_LIBADD = libfsm.la $(COLM_LD)
 
-if WITH_RAGEL_KELBT
-nodist_ragel_SOURCES += rlscan.cc rlparse.cc rlparse.h 
+if LINKER_NO_UNDEFINED
+libfsm_la_LDFLAGS += -Wl,--no-undefined
+libragel_la_LDFLAGS += -Wl,--no-undefined
 endif
 
-nodist_ragel_SOURCES += \
-	parse.c commit.cc
+#
+# ragel program.
+#
+ragel_CPPFLAGS = -I$(top_srcdir)/aapl
 
-ragel_LDADD = $(COLM_LD)
-ragel_DEPENDENCIES = $(COLM_LIBDEP)
+dist_ragel_SOURCES = \
+	main.cc
+
+nodist_ragel_SOURCES = \
+	parse.c rlreduce.cc
+
+ragel_LDADD = libragel.la libfsm.la $(COLM_LD)
+ragel_DEPENDENCIES = libragel.la libfsm.la $(COLM_LIBDEP)
+
+BUILT_SOURCES = \
+	version.h \
+	parse.c rlreduce.cc \
+	include/ragel
+
+include/ragel:
+	mkdir -p include
+	ln -s .. include/ragel
+
+if WITH_RAGEL_KELBT
+nodist_ragel_SOURCES += \
+	rlscan.cc rlparse.cc rlparse.h 
+
+BUILT_SOURCES += \
+	rlscan.cc rlparse.cc rlparse.h 
+endif
 
 version.h: Makefile
 	echo '#define VERSION "$(PACKAGE_VERSION)"' > version.h
 	echo '#define PUBDATE "$(PUBDATE)"' >> version.h
 
-nodist_libfsm_la_SOURCES = version.h
-libfsm_la_SOURCES = $(LIBFSM_SRC)
-libfsm_la_CPPFLAGS = -I$(top_srcdir)/aapl
-
 EXTRA_DIST = \
 	$(RAGEL_LM) \
 	rlscan.rl \
 	rlparse.kh \
-	rlparse.kl
+	rlparse.kl \
+	ril.lm  \
+	rlhc-main.lm
 
 CLEANFILES = parse.c commit.cc rlhc.c
 
@@ -79,39 +129,13 @@ endif
 RAGEL_LM = \
 	rlparse.lm \
 	ragel.lm \
-	host.lm \
-	reducer.lm \
-	langdesc.lm
+	rlreduce.lm
 
 parse.c: $(RAGEL_LM) $(COLM_BINDEP)
-	$(COLM) -c -b rlparse_object -o $@ -m commit.cc $<
+	$(COLM) -c -b rlparseC -o $@ -m rlreduce.cc $<
 
-commit.cc: parse.c
+rlreduce.cc: parse.c
 
-# These are necessary because we are not using built sources. They create the
-# dependency on the colm run for the objects that that require its output. Must
-# create them for every target.
-ragel-if.$(OBJEXT): parse.c
-ragel-load.$(OBJEXT): parse.c
-ragel-commit.$(OBJEXT): parse.c
-ragel-reducer.$(OBJEXT): parse.c
-
-RLHC = \
-	rlhc-host.lm \
-	rlhc-c.lm \
-	rlhc-d.lm \
-	rlhc-go.lm \
-	rlhc-csharp.lm \
-	rlhc-java.lm \
-	rlhc-ruby.lm \
-	rlhc-rust.lm \
-	rlhc-ocaml.lm \
-	rlhc-crack.lm \
-	rlhc-julia.lm \
-	rlhc-js.lm
-
-rlhc.c: rlhc.lm $(RLHC) $(COLM_BINDEP)
-	$(COLM) -c -b rlhc_object -o $@ $<
 
 if WITH_RAGEL_KELBT
 

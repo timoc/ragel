@@ -1,5 +1,5 @@
 dnl 
-dnl Copyright 2001-2016 Adrian Thurston <thurston@colm.net>
+dnl Copyright 2001-2018 Adrian Thurston <thurston@colm.net>
 dnl
 dnl Permission is hereby granted, free of charge, to any person obtaining a copy
 dnl of this software and associated documentation files (the "Software"), to
@@ -20,10 +20,10 @@ dnl OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN TH
 dnl SOFTWARE.
 dnl
   
-AC_INIT(ragel, 7.0.0.10)
-PUBDATE="May 2017"
+AC_INIT(ragel, 7.0.0.12)
+PUBDATE="May 2019"
 
-EXPECTED_COLM=0.13.0.5
+EXPECTED_COLM=0.13.0.7
 
 AM_INIT_AUTOMAKE([foreign])
 AC_SUBST(PUBDATE)
@@ -126,7 +126,7 @@ if [test "x$build_program" = "xyes"]; then
 				CPPFLAGS="${CPPFLAGS} -I$withval/src/include"
 				LDFLAGS="${LDFLAGS} -L$withval/src"
 				COLM="$withval/src/colm"
-				COLM_LD="$withval/src/.libs/libcolm.a"
+				COLM_LD="$withval/src/libcolm.la"
 				COLM_LIBDEP="$COLM_LD"
 				COLM_BINDEP="$COLM"
 			else
@@ -196,11 +196,25 @@ AM_CONDITIONAL([BUILD_PROGRAM],    [test "x$build_program" = "xyes"])
 AM_CONDITIONAL([BUILD_MANUAL],     [test "x$build_manual" = "xyes"])
 AM_CONDITIONAL([WITH_RAGEL_KELBT], [test "x$RAGEL_KELBT" = "xyes"])
 
+AC_CANONICAL_HOST()
+AM_CONDITIONAL([LINKER_NO_UNDEFINED], [test "x$host_os" = "xlinux-gnu"])
+
 dnl write output files
 AC_OUTPUT([
 		Makefile
 		src/Makefile
 		src/host-ruby/Makefile
+		src/host-asm/Makefile
+		src/host-julia/Makefile
+		src/host-ocaml/Makefile
+		src/host-c/Makefile
+		src/host-d/Makefile
+		src/host-csharp/Makefile
+		src/host-go/Makefile
+		src/host-java/Makefile
+		src/host-rust/Makefile
+		src/host-crack/Makefile
+		src/host-js/Makefile
 		aapl/Makefile 
 		doc/Makefile
 		doc/ragel.1
